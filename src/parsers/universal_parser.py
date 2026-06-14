@@ -520,75 +520,14 @@ async def _parse_ozon(url: str) -> dict | None:
     import logging
     log = logging.getLogger(__name__)
 
-    if "/t/" in url or "/product/" not in url:
-        url = await _resolve_short_url(url)
-        log.info(f"Ozon resolved URL: {url}")
+    needs_playwright = "/t/" in url or "/product/" not in url
 
-    match = re.search(r"ozon\.ru/product/.*?-(\d+)/?", url)
-    if not match:
-        match = re.search(r"ozon\.ru/product/(\d+)", url)
-    if not match:
-        return None
-
-    product_id = match.group(1)
-    log.info(f"Ozon parsing product_id={product_id}")
-
-    try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-            resp = await client.get(
-                f"https://api.ozon.ru/composer-api.bx/page/json/v2",
-                params={"url": f"/product/{product_id}"},
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                    "Accept": "application/json",
-                    "x-requested-with": "XMLHttpRequest",
-                },
-            )
-            log.info(f"Ozon API status={resp.status_code}")
-            if resp.status_code == 200:
-                data = resp.json()
-                widget = data.get("widgetStates", {})
-                for key, val in widget.items():
-                    if "description" in key.lower() or "detail" in key.lower():
-                        try:
-                            w = json.loads(val) if isinstance(val, str) else val
-                            title = w.get("title") or w.get("name", "")
-                            price_raw = w.get("price") or w.get("actionPrice") or w.get("oldPrice", "")
-                            if price_raw:
-                                price_str = re.sub(r"[^\d,\.]", "", str(price_raw)).replace(",", ".")
-                                price = float(price_str) if price_str else None
-                                if price and price > 0:
-                                    image = w.get("image") or w.get("imageUrl", "")
-                                    log.info(f"Ozon widget price: {price}")
-                                    return {"title": title or "Товар Ozon", "price": price, "currency": "₽", "image": image}
-                        except Exception:
-                            pass
-    except Exception as e:
-        log.error(f"Ozon API error: {e}")
-
-    try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-            resp = await client.get(
-                "https://api.ozon.ru/composer-api.bx/page/json/v2",
-                params={"url": url.replace("https://ozon.ru", "").replace("https://www.ozon.ru", "")},
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                    "Accept": "application/json",
-                    "x-requested-with": "XMLHttpRequest",
-                },
-            )
-            log.info(f"Ozon page API status={resp.status_code}")
-            if resp.status_code == 200:
-                text = resp.text
-                price_match = re.search(r'"price":\s*"?(\d[\d\s]*\d)"?', text)
-                title_match = re.search(r'"title":\s*"([^"]{5,200})"', text)
-                if price_match:
-                    price = float(price_match.group(1).replace(" ", ""))
-                    title = title_match.group(1) if title_match else "Товар Ozon"
-                    log.info(f"Ozon regex price: {price}")
-                    return {"title": title, "price": price, "currency": "₽", "image": None}
-    except Exception as e:
-        log.error(f"Ozon page API error: {e}")
+    if not needs_playwright:
+        match = re.search(r"ozon\.ru/product/.*?-(\d+)/?", url)
+        if not match:
+            match = re.search(r"ozon\.ru/product/(\d+)", url)
+        if not match:
+            return None
 
     try:
         from playwright.async_api import async_playwright
@@ -614,7 +553,7 @@ async def _parse_ozon(url: str) -> dict | None:
                 pass
 
             resolved_url = page.url
-            log.info(f"Ozon Playwright resolved: {resolved_url}")
+            log.info(f"Ozon resolved: {resolved_url}")
 
             price = None
             title = None
@@ -622,7 +561,7 @@ async def _parse_ozon(url: str) -> dict | None:
             try:
                 title_el = await page.query_selector("h1")
                 if title_el:
-                    title = await title_el.inner_text()
+                    title = (await title_el.inner_text()).strip()
             except Exception:
                 pass
 
@@ -666,6 +605,10 @@ async def _parse_ozon(url: str) -> dict | None:
             if price and price > 0:
                 log.info(f"Ozon Playwright price: {price}")
                 return {"title": title or "Товар Ozon", "price": price, "currency": "₽", "image": image}
+    except Exception as e:
+        log.error(f"Ozon Playwright error: {e}")
+
+    return None
     except Exception as e:
         log.error(f"Ozon page API error: {e}")
 
