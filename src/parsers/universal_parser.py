@@ -12,6 +12,36 @@ logger = logging.getLogger(__name__)
 
 _free_proxies: list[str] = []
 _proxy_index: int = 0
+_ozon_cookies_cache: list[dict] | None = None
+
+
+def _load_ozon_cookies() -> list[dict]:
+    global _ozon_cookies_cache
+    if _ozon_cookies_cache is not None:
+        return _ozon_cookies_cache
+    cookie_paths = [
+        OZON_COOKIES,
+        "config/ozon_cookies.json",
+        "/app/config/ozon_cookies.json",
+    ]
+    for path in cookie_paths:
+        if not path:
+            continue
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+                if isinstance(data, list) and data:
+                    _ozon_cookies_cache = data
+                    logger.info(f"Loaded {len(data)} Ozon cookies from {path}")
+                    return data
+        except Exception:
+            continue
+    return []
+
+logger = logging.getLogger(__name__)
+
+_free_proxies: list[str] = []
+_proxy_index: int = 0
 
 
 async def _fetch_free_proxies() -> list[str]:
@@ -597,27 +627,26 @@ async def _parse_ozon(url: str) -> dict | None:
                     locale="ru-RU",
                 )
 
-                if OZON_COOKIES:
+                ozon_cookies = _load_ozon_cookies()
+                if ozon_cookies:
                     try:
-                        cookies = json.loads(OZON_COOKIES)
-                        if isinstance(cookies, list):
-                            for c in cookies:
-                                cookie = {
-                                    "name": c.get("name", ""),
-                                    "value": c.get("value", ""),
-                                    "domain": c.get("domain", ".ozon.ru"),
-                                    "path": c.get("path", "/"),
-                                }
-                                if "expirationDate" in c:
-                                    cookie["expires"] = c["expirationDate"]
-                                if "secure" in c:
-                                    cookie["secure"] = c["secure"]
-                                if "httpOnly" in c:
-                                    cookie["httpOnly"] = c["httpOnly"]
-                                context.add_cookies([cookie])
-                            log.info(f"Ozon loaded {len(cookies)} cookies")
+                        for c in ozon_cookies:
+                            cookie = {
+                                "name": c.get("name", ""),
+                                "value": c.get("value", ""),
+                                "domain": c.get("domain", ".ozon.ru"),
+                                "path": c.get("path", "/"),
+                            }
+                            if "expires" in c:
+                                cookie["expires"] = c["expires"]
+                            if "secure" in c:
+                                cookie["secure"] = c["secure"]
+                            if "httpOnly" in c:
+                                cookie["httpOnly"] = c["httpOnly"]
+                            context.add_cookies([cookie])
+                        log.info(f"Ozon loaded {len(ozon_cookies)} cookies")
                     except Exception as e:
-                        log.error(f"Ozon cookie parse error: {e}")
+                        log.error(f"Ozon cookie load error: {e}")
 
                 page = await context.new_page()
                 stealth = Stealth()
