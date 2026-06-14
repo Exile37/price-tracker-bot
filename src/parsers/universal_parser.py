@@ -590,6 +590,85 @@ async def _parse_ozon(url: str) -> dict | None:
     except Exception as e:
         log.error(f"Ozon page API error: {e}")
 
+    try:
+        from playwright.async_api import async_playwright
+        from playwright_stealth import Stealth
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+            )
+            context = await browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                locale="ru-RU",
+            )
+            page = await context.new_page()
+            stealth = Stealth()
+            await stealth.apply_stealth_async(page)
+
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                await page.wait_for_timeout(5000)
+            except Exception:
+                pass
+
+            resolved_url = page.url
+            log.info(f"Ozon Playwright resolved: {resolved_url}")
+
+            price = None
+            title = None
+
+            try:
+                title_el = await page.query_selector("h1")
+                if title_el:
+                    title = await title_el.inner_text()
+            except Exception:
+                pass
+
+            price_selectors = [
+                "[data-widget='webPrice'] span",
+                ".pdp-order-price__current",
+                "span[data-v-6c9881e2]",
+                "[class*='price'] span",
+            ]
+            for sel in price_selectors:
+                try:
+                    el = await page.query_selector(sel)
+                    if el:
+                        txt = await el.inner_text()
+                        nums = re.findall(r"(\d[\d\s]*\d)", txt)
+                        if nums:
+                            price = float(nums[0].replace(" ", ""))
+                            break
+                except Exception:
+                    pass
+
+            if not price:
+                try:
+                    text = await page.inner_text("body")
+                    found = re.findall(r"(\d[\d\s]*\d)\s*₽", text)
+                    if found:
+                        price = float(found[0].replace(" ", ""))
+                except Exception:
+                    pass
+
+            image = None
+            try:
+                og_img = await page.query_selector("meta[property='og:image']")
+                if og_img:
+                    image = await og_img.get_attribute("content")
+            except Exception:
+                pass
+
+            await browser.close()
+
+            if price and price > 0:
+                log.info(f"Ozon Playwright price: {price}")
+                return {"title": title or "Товар Ozon", "price": price, "currency": "₽", "image": image}
+    except Exception as e:
+        log.error(f"Ozon page API error: {e}")
+
     return None
 
 
@@ -661,6 +740,74 @@ async def _parse_yandex_market(url: str) -> dict | None:
                         title = title_match.group(1).strip() if title_match else "Товар Яндекс Маркет"
                         log.info(f"Yandex Market regex price: {price}")
                         return {"title": title[:200], "price": price, "currency": "₽", "image": None}
+    except Exception as e:
+        log.error(f"Yandex Market page error: {e}")
+
+    try:
+        from playwright.async_api import async_playwright
+        from playwright_stealth import Stealth
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+            )
+            context = await browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                locale="ru-RU",
+            )
+            page = await context.new_page()
+            stealth = Stealth()
+            await stealth.apply_stealth_async(page)
+
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                await page.wait_for_timeout(5000)
+            except Exception:
+                pass
+
+            price = None
+            title = None
+
+            try:
+                title_el = await page.query_selector("h1")
+                if title_el:
+                    title = await title_el.inner_text()
+            except Exception:
+                pass
+
+            price_selectors = [
+                "[data-auto='price']",
+                "[data-zone-name='price']",
+                "span[data-auto='price-value']",
+                "div[class*='price'] span",
+            ]
+            for sel in price_selectors:
+                try:
+                    el = await page.query_selector(sel)
+                    if el:
+                        txt = await el.inner_text()
+                        nums = re.findall(r"(\d[\d\s]*\d)", txt)
+                        if nums:
+                            price = float(nums[0].replace(" ", ""))
+                            break
+                except Exception:
+                    pass
+
+            if not price:
+                try:
+                    text = await page.inner_text("body")
+                    found = re.findall(r"(\d[\d\s]*\d)\s*₽", text)
+                    if found:
+                        price = float(found[0].replace(" ", ""))
+                except Exception:
+                    pass
+
+            await browser.close()
+
+            if price and price > 0:
+                log.info(f"Yandex Market Playwright price: {price}")
+                return {"title": title or "Товар Яндекс Маркет", "price": price, "currency": "₽", "image": None}
     except Exception as e:
         log.error(f"Yandex Market page error: {e}")
 
