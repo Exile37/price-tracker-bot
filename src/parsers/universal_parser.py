@@ -618,6 +618,7 @@ async def _parse_ozon(url: str) -> dict | None:
                     },
                 )
                 log.info(f"Ozon ScraperAPI status={resp.status_code}")
+                log.info(f"Ozon ScraperAPI body: {resp.text[:500]}")
                 if resp.status_code == 200:
                     data = resp.json()
                     widget_states = data.get("widgetStates", {})
@@ -681,7 +682,7 @@ async def _parse_ozon(url: str) -> dict | None:
                             "image": image,
                         }
         except Exception as e:
-            log.error(f"Ozon ScraperAPI error: {e}")
+            log.error(f"Ozon ScraperAPI error: {type(e).__name__}: {e}")
 
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
