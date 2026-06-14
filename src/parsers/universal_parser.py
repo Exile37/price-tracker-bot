@@ -643,7 +643,7 @@ async def _parse_ozon(url: str) -> dict | None:
                                 cookie["secure"] = c["secure"]
                             if "httpOnly" in c:
                                 cookie["httpOnly"] = c["httpOnly"]
-                            context.add_cookies([cookie])
+                            await context.add_cookies([cookie])
                         log.info(f"Ozon loaded {len(ozon_cookies)} cookies")
                     except Exception as e:
                         log.error(f"Ozon cookie load error: {e}")
