@@ -2,18 +2,70 @@ import re
 import json
 import httpx
 import logging
-from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
 
-async def _fetch_card_info(nm_id: str) -> tuple[str | None, str | None]:
-    vol = int(nm_id[:4]) if len(nm_id) > 5 else int(nm_id[:4])
-    part = int(nm_id[:6]) if len(nm_id) > 5 else int(nm_id[:6])
+def _wb_calc_vol_part(nm_id: str) -> tuple[int, int]:
+    nm = int(nm_id)
+    vol = nm // 100000
+    part = nm // 1000
+    return vol, part
 
-    basket_num = vol // 100000 + 1
-    basket = f"basket-{basket_num:02d}"
-    cdn_url = f"https://{basket}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/info/ru/card.json"
+
+def _wb_basket_host(vol: int) -> str:
+    if vol <= 143:
+        return "basket-01.wbbasket.ru"
+    elif vol <= 287:
+        return "basket-02.wbbasket.ru"
+    elif vol <= 431:
+        return "basket-03.wbbasket.ru"
+    elif vol <= 719:
+        return "basket-04.wbbasket.ru"
+    elif vol <= 1007:
+        return "basket-05.wbbasket.ru"
+    elif vol <= 1061:
+        return "basket-06.wbbasket.ru"
+    elif vol <= 1115:
+        return "basket-07.wbbasket.ru"
+    elif vol <= 1169:
+        return "basket-08.wbbasket.ru"
+    elif vol <= 1313:
+        return "basket-09.wbbasket.ru"
+    elif vol <= 1601:
+        return "basket-10.wbbasket.ru"
+    elif vol <= 1655:
+        return "basket-11.wbbasket.ru"
+    elif vol <= 1919:
+        return "basket-12.wbbasket.ru"
+    elif vol <= 2045:
+        return "basket-13.wbbasket.ru"
+    elif vol <= 2189:
+        return "basket-14.wbbasket.ru"
+    elif vol <= 2407:
+        return "basket-15.wbbasket.ru"
+    elif vol <= 2625:
+        return "basket-16.wbbasket.ru"
+    elif vol <= 2843:
+        return "basket-17.wbbasket.ru"
+    elif vol <= 3061:
+        return "basket-18.wbbasket.ru"
+    elif vol <= 3279:
+        return "basket-19.wbbasket.ru"
+    elif vol <= 3497:
+        return "basket-20.wbbasket.ru"
+    elif vol <= 3715:
+        return "basket-21.wbbasket.ru"
+    elif vol <= 3933:
+        return "basket-22.wbbasket.ru"
+    else:
+        return "basket-23.wbbasket.ru"
+
+
+async def _fetch_card_info(nm_id: str) -> tuple[str | None, str | None]:
+    vol, part = _wb_calc_vol_part(nm_id)
+    host = _wb_basket_host(vol)
+    cdn_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/info/ru/card.json"
 
     try:
         async with httpx.AsyncClient(timeout=5) as client:
@@ -21,7 +73,7 @@ async def _fetch_card_info(nm_id: str) -> tuple[str | None, str | None]:
             if resp.status_code == 200:
                 data = resp.json()
                 title = data.get("imt_name", "")
-                image_url = f"https://{basket}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/images/big/1.jpg"
+                image_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/images/big/1.jpg"
                 return title, image_url
     except Exception:
         pass
@@ -29,13 +81,10 @@ async def _fetch_card_info(nm_id: str) -> tuple[str | None, str | None]:
 
 
 async def _fetch_price(nm_id: str) -> float | None:
-    vol = int(nm_id[:4]) if len(nm_id) > 5 else int(nm_id[:4])
-    part = int(nm_id[:6]) if len(nm_id) > 5 else int(nm_id[:6])
+    vol, part = _wb_calc_vol_part(nm_id)
+    host = _wb_basket_host(vol)
 
-    basket_num = vol // 100000 + 1
-    basket = f"basket-{basket_num:02d}"
-
-    history_url = f"https://{basket}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/info/price-history.json"
+    history_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/info/price-history.json"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(history_url, headers={"User-Agent": "Mozilla/5.0"})
@@ -77,7 +126,6 @@ async def _scrape_price(url: str, nm_id: str) -> float | None:
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 for _ in range(15):
                     await page.wait_for_timeout(1500)
-
             except Exception:
                 pass
 
@@ -127,6 +175,7 @@ async def _scrape_price(url: str, nm_id: str) -> float | None:
 
             if not price:
                 try:
+                    from bs4 import BeautifulSoup
                     html = await page.content()
                     soup = BeautifulSoup(html, "lxml")
                     text = soup.get_text()
@@ -151,7 +200,6 @@ async def parse_product(url: str) -> dict | None:
     logger.info(f"WB parsing nm_id={nm_id}")
 
     title, image_url = await _fetch_card_info(nm_id)
-
     price = await _fetch_price(nm_id)
 
     if not price:
