@@ -6,7 +6,7 @@ import logging
 import httpx
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
-from config.settings import PROXY_URL
+from config.settings import PROXY_URL, OZON_COOKIES
 
 logger = logging.getLogger(__name__)
 
@@ -596,6 +596,29 @@ async def _parse_ozon(url: str) -> dict | None:
                     viewport={"width": 1920, "height": 1080},
                     locale="ru-RU",
                 )
+
+                if OZON_COOKIES:
+                    try:
+                        cookies = json.loads(OZON_COOKIES)
+                        if isinstance(cookies, list):
+                            for c in cookies:
+                                cookie = {
+                                    "name": c.get("name", ""),
+                                    "value": c.get("value", ""),
+                                    "domain": c.get("domain", ".ozon.ru"),
+                                    "path": c.get("path", "/"),
+                                }
+                                if "expirationDate" in c:
+                                    cookie["expires"] = c["expirationDate"]
+                                if "secure" in c:
+                                    cookie["secure"] = c["secure"]
+                                if "httpOnly" in c:
+                                    cookie["httpOnly"] = c["httpOnly"]
+                                context.add_cookies([cookie])
+                            log.info(f"Ozon loaded {len(cookies)} cookies")
+                    except Exception as e:
+                        log.error(f"Ozon cookie parse error: {e}")
+
                 page = await context.new_page()
                 stealth = Stealth()
                 await stealth.apply_stealth_async(page)
