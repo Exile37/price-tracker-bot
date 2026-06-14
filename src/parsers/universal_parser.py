@@ -39,32 +39,127 @@ async def _fetch_with_playwright(url: str) -> str | None:
         return None
 
 
-async def _parse_wildberries(url: str) -> dict | None:
-    match = re.search(r"wildberries\.ru/catalog/(\d+)", url)
-    if not match:
-        return None
+def _wb_get_vol_part(nm_id: str) -> tuple[str, str]:
+    vol = int(nm_id[:len(nm_id) // 2 if len(nm_id) > 5 else 4])
+    part = int(nm_id[:len(nm_id) - 3 if len(nm_id) > 5 else 6])
+    return str(vol), str(part)
 
-    nm_id = match.group(1)
-    vol = nm_id[:4]
-    part = nm_id[:6]
 
-    title = None
-    image_url = None
-    for i in range(1, 20):
-        basket = f"basket-{i:02d}" if i < 10 else f"basket-{i}"
-        cdn_url = f"https://{basket}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/info/ru/card.json"
-        try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                resp = await client.get(cdn_url, headers={"User-Agent": "Mozilla/5.0"})
-                if resp.status_code == 200:
-                    data = resp.json()
-                    title = data.get("imt_name", "")
-                    image_url = f"https://{basket}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/images/big/1.jpg"
-                    break
-        except Exception:
-            pass
+def _wb_basket_host(vol: int) -> str:
+    if vol <= 143:
+        return "basket-01.wbbasket.ru"
+    elif vol <= 287:
+        return "basket-02.wbbasket.ru"
+    elif vol <= 431:
+        return "basket-03.wbbasket.ru"
+    elif vol <= 719:
+        return "basket-04.wbbasket.ru"
+    elif vol <= 1007:
+        return "basket-05.wbbasket.ru"
+    elif vol <= 1061:
+        return "basket-06.wbbasket.ru"
+    elif vol <= 1115:
+        return "basket-07.wbbasket.ru"
+    elif vol <= 1169:
+        return "basket-08.wbbasket.ru"
+    elif vol <= 1313:
+        return "basket-09.wbbasket.ru"
+    elif vol <= 1601:
+        return "basket-10.wbbasket.ru"
+    elif vol <= 1655:
+        return "basket-11.wbbasket.ru"
+    elif vol <= 1919:
+        return "basket-12.wbbasket.ru"
+    elif vol <= 2045:
+        return "basket-13.wbbasket.ru"
+    elif vol <= 2189:
+        return "basket-14.wbbasket.ru"
+    elif vol <= 2407:
+        return "basket-15.wbbasket.ru"
+    elif vol <= 2625:
+        return "basket-16.wbbasket.ru"
+    elif vol <= 2843:
+        return "basket-17.wbbasket.ru"
+    elif vol <= 3061:
+        return "basket-18.wbbasket.ru"
+    elif vol <= 3279:
+        return "basket-19.wbbasket.ru"
+    elif vol <= 3497:
+        return "basket-20.wbbasket.ru"
+    elif vol <= 3715:
+        return "basket-21.wbbasket.ru"
+    elif vol <= 3933:
+        return "basket-22.wbbasket.ru"
+    else:
+        return "basket-23.wbbasket.ru"
 
-    price = None
+
+async def _wb_get_card_info(nm_id: str) -> tuple[str | None, str | None]:
+    vol, part = _wb_get_vol_part(nm_id)
+    host = _wb_basket_host(int(vol))
+    cdn_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/info/ru/card.json"
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(cdn_url, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200:
+                data = resp.json()
+                title = data.get("imt_name", "")
+                seller = data.get("selling", "")
+                brand = data.get("nm_id", "")
+                image_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/images/big/1.jpg"
+                return title, image_url
+    except Exception:
+        pass
+    return None, None
+
+
+async def _wb_get_prices(nm_id: str) -> float | None:
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"https://card.wb.ru/cards/v2/detail",
+                params={"appType": "1", "curr": "rub", "nm": nm_id},
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                    "Accept": "application/json",
+                    "Origin": "https://www.wildberries.ru",
+                    "Referer": "https://www.wildberries.ru/",
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                products = data.get("data", {}).get("products", [])
+                for prod in products:
+                    if str(prod.get("id")) == nm_id:
+                        sizes = prod.get("sizes", [])
+                        for size in sizes:
+                            for price_info in size.get("price", []):
+                                if isinstance(price_info, dict):
+                                    total = price_info.get("total", 0)
+                                    if total > 0:
+                                        return total / 100
+    except Exception:
+        pass
+
+    try:
+        vol, part = _wb_get_vol_part(nm_id)
+        host = _wb_basket_host(int(vol))
+        api_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/info/price-history.json"
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(api_url, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200:
+                data = resp.json()
+                history = data.get("history", [])
+                if history:
+                    latest = history[-1]
+                    return latest.get("price", 0) / 100
+    except Exception:
+        pass
+
+    return None
+
+
+async def _wb_scrape_price(url: str, nm_id: str) -> float | None:
     try:
         from playwright.async_api import async_playwright
         from playwright_stealth import Stealth
@@ -105,10 +200,11 @@ async def _parse_wildberries(url: str) -> dict | None:
             except Exception:
                 pass
 
-            for _ in range(20):
+            for _ in range(15):
                 await page.wait_for_timeout(1500)
 
-            # Priority 1: price near h1 (main product, not recommendations)
+            price = None
+
             try:
                 price = await page.evaluate("""
                     () => {
@@ -131,7 +227,6 @@ async def _parse_wildberries(url: str) -> dict | None:
             except Exception:
                 pass
 
-            # Priority 2: buy button price
             if not price:
                 try:
                     price = await page.evaluate("""
@@ -151,7 +246,6 @@ async def _parse_wildberries(url: str) -> dict | None:
                 except Exception:
                     pass
 
-            # Priority 3: DOM selectors
             if not price:
                 selectors = [
                     ".price-block__final-price",
@@ -174,7 +268,6 @@ async def _parse_wildberries(url: str) -> dict | None:
                     except Exception:
                         pass
 
-            # Priority 4: regex from page text (risky - may hit recommendations)
             if not price:
                 try:
                     html = await page.content()
@@ -186,13 +279,28 @@ async def _parse_wildberries(url: str) -> dict | None:
                 except Exception:
                     pass
 
-            # Priority 5: API (last resort)
             if not price and api_prices:
                 price = api_prices[0].get("total", 0) / 100
 
             await browser.close()
+            return price
     except Exception:
-        pass
+        return None
+
+
+async def _parse_wildberries(url: str) -> dict | None:
+    match = re.search(r"wildberries\.ru/catalog/(\d+)", url)
+    if not match:
+        return None
+
+    nm_id = match.group(1)
+
+    title, image_url = await _wb_get_card_info(nm_id)
+
+    price = await _wb_get_prices(nm_id)
+
+    if not price:
+        price = await _wb_scrape_price(url, nm_id)
 
     if not title:
         title = "Товар Wildberries"
