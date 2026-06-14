@@ -114,6 +114,9 @@ async def _wb_get_card_info(nm_id: str) -> tuple[str | None, str | None]:
 
 
 async def _wb_get_prices(nm_id: str) -> float | None:
+    import logging
+    log = logging.getLogger(__name__)
+
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
@@ -149,10 +152,23 @@ async def _wb_get_prices(nm_id: str) -> float | None:
             resp = await client.get(api_url, headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200:
                 data = resp.json()
+                log.info(f"WB price-history response keys: {list(data.keys())}")
+
+                top_price = data.get("price")
+                if top_price and isinstance(top_price, (int, float)) and top_price > 0:
+                    return top_price / 100
+
                 history = data.get("history", [])
                 if history:
                     latest = history[-1]
-                    return latest.get("price", 0) / 100
+                    p = latest.get("price", 0)
+                    if p and p > 0:
+                        return p / 100
+
+                for key in ["salePriceU", "sale", "currentPrice", "priceU"]:
+                    val = data.get(key)
+                    if val and isinstance(val, (int, float)) and val > 0:
+                        return val / 100 if val > 100 else val
     except Exception:
         pass
 
@@ -289,22 +305,31 @@ async def _wb_scrape_price(url: str, nm_id: str) -> float | None:
 
 
 async def _parse_wildberries(url: str) -> dict | None:
+    import logging
+    log = logging.getLogger(__name__)
+
     match = re.search(r"wildberries\.ru/catalog/(\d+)", url)
     if not match:
         return None
 
     nm_id = match.group(1)
+    log.info(f"WB parsing nm_id={nm_id}")
 
     title, image_url = await _wb_get_card_info(nm_id)
+    log.info(f"WB card: title={title[:50] if title else None}, image={'yes' if image_url else 'no'}")
 
     price = await _wb_get_prices(nm_id)
+    log.info(f"WB API price: {price}")
 
     if not price:
+        log.info("WB API failed, trying Playwright scrape...")
         price = await _wb_scrape_price(url, nm_id)
+        log.info(f"WB scrape price: {price}")
 
     if not title:
         title = "Товар Wildberries"
     if price is None:
+        log.warning(f"WB: all methods failed for nm_id={nm_id}")
         return None
 
     return {
