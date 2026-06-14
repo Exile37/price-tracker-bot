@@ -595,158 +595,95 @@ async def _parse_ozon(url: str) -> dict | None:
     import logging
     log = logging.getLogger(__name__)
 
-    needs_playwright = "/t/" in url or "/product/" not in url
+    match = re.search(r"ozon\.ru/product/.*?-(\d+)/?", url)
+    if not match:
+        match = re.search(r"ozon\.ru/product/(\d+)", url)
+    if not match:
+        match = re.search(r"-(\d+)/?(?:\?|$)", url)
+    if not match:
+        return None
 
-    if not needs_playwright:
-        match = re.search(r"ozon\.ru/product/.*?-(\d+)/?", url)
-        if not match:
-            match = re.search(r"ozon\.ru/product/(\d+)", url)
-        if not match:
-            return None
+    product_id = match.group(1)
+    log.info(f"Ozon parsing product_id={product_id}")
 
-    await _fetch_free_proxies()
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(
+                "https://api.ozon.ru/composer-api.bx/page/json/v2",
+                params={"url": f"/product/{product_id}/"},
+                headers={
+                    "User-Agent": "ozonapp_android/17.31.0 (android 13; SDK 33)",
+                    "Accept": "application/json",
+                    "x-o3-app-name": "ozonapp_android",
+                    "x-o3-app-version": "17.31.0",
+                    "x-o3-device-type": "mobile",
+                },
+            )
+            log.info(f"Ozon mobile API status={resp.status_code}")
+            if resp.status_code == 200:
+                data = resp.json()
+                widget_states = data.get("widgetStates", {})
+                log.info(f"Ozon widgets: {list(widget_states.keys())[:10]}")
 
-    for attempt in range(3):
-        ozon_cookies = _load_ozon_cookies()
-        use_proxy = not ozon_cookies
-        proxy = _get_random_proxy() if use_proxy else None
-        try:
-            from playwright.async_api import async_playwright
-            from playwright_stealth import Stealth
-
-            launch_args = {
-                "headless": True,
-                "args": [
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-setuid-sandbox",
-                    "--disable-infobars",
-                    "--window-size=1920,1080",
-                ]
-            }
-            if proxy:
-                launch_args["proxy"] = {"server": proxy}
-                log.info(f"Ozon using proxy: {proxy}")
-            elif ozon_cookies:
-                log.info(f"Ozon using cookies (no proxy)")
-
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(**launch_args)
-                context = await browser.new_context(
-                    viewport={"width": 1920, "height": 1080},
-                    locale="ru-RU",
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                    extra_http_headers={
-                        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                    },
-                )
-
-                ozon_cookies = _load_ozon_cookies()
-                if ozon_cookies:
-                    try:
-                        for c in ozon_cookies:
-                            cookie = {
-                                "name": c.get("name", ""),
-                                "value": c.get("value", ""),
-                                "domain": c.get("domain", ".ozon.ru"),
-                                "path": c.get("path", "/"),
-                            }
-                            if "expires" in c:
-                                cookie["expires"] = c["expires"]
-                            if "secure" in c:
-                                cookie["secure"] = c["secure"]
-                            if "httpOnly" in c:
-                                cookie["httpOnly"] = c["httpOnly"]
-                            await context.add_cookies([cookie])
-                        log.info(f"Ozon loaded {len(ozon_cookies)} cookies")
-                    except Exception as e:
-                        log.error(f"Ozon cookie load error: {e}")
-
-                page = await context.new_page()
-                await page.add_init_script("""
-                    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                    Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3]});
-                    Object.defineProperty(navigator, 'languages', {get: () => ['ru-RU', 'ru']});
-                    window.chrome = {runtime: {}};
-                """)
-                stealth = Stealth()
-                await stealth.apply_stealth_async(page)
-
-                try:
-                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                    try:
-                        await page.wait_for_selector("h1", timeout=15000)
-                    except Exception:
-                        pass
-                    try:
-                        await page.wait_for_selector(
-                            "[data-widget='webPrice'], [data-widget='webStickyProducts'], span[class*='price']",
-                            timeout=10000
-                        )
-                    except Exception:
-                        pass
-                    await page.wait_for_timeout(2000)
-                except Exception:
-                    pass
-
-                resolved_url = page.url
-                log.info(f"Ozon resolved (attempt {attempt+1}): {resolved_url}")
-
+                title = ""
                 price = None
-                title = None
+                image = ""
 
-                try:
-                    result = await page.evaluate("""
-                        () => {
-                            const meta = {};
-                            const h1 = document.querySelector('h1');
-                            meta._h1 = h1 ? h1.textContent.trim() : '';
+                for key, val in widget_states.items():
+                    try:
+                        w = json.loads(val) if isinstance(val, str) else val
+                        if not isinstance(w, dict):
+                            continue
 
-                            const priceWidget = document.querySelector('[data-widget="webPrice"]');
-                            if (priceWidget) {
-                                const priceText = priceWidget.innerText;
-                                const nums = priceText.match(/\\d[\\d\\s]*\\d/g) || [];
-                                meta._prices = nums.slice(0, 5);
-                            } else {
-                                const allText = document.body.innerText;
-                                meta._prices = (allText.match(/\\d[\\d\\s]*\\d\\s*₽/g) || []).slice(0, 5);
-                            }
+                        if not title and "title" in w:
+                            t = w.get("title", "")
+                            if len(t) > 5:
+                                title = t
 
-                            const ogImage = document.querySelector('meta[property="og:image"]');
-                            meta['og:image'] = ogImage ? ogImage.content : '';
-                            return meta;
-                        }
-                    """)
-                    log.info(f"Ozon page meta: {result.get('_h1', '')[:50]}, prices: {result.get('_prices', [])}")
+                        if not image and "image" in w:
+                            img = w.get("image", "")
+                            if img and img.startswith("http"):
+                                image = img
 
-                    title = result.get("_h1") or result.get("og:title", "")
+                        if price is None:
+                            for price_key in ["price", "actionPrice", "oldPrice", "basePrice"]:
+                                p = w.get(price_key)
+                                if p:
+                                    if isinstance(p, dict):
+                                        p = p.get("amount") or p.get("value") or p.get("price", 0)
+                                    if isinstance(p, str):
+                                        p = p.replace(" ", "").replace(",", ".")
+                                        p = re.sub(r"[^\d.]", "", p)
+                                    if p and float(p) > 0:
+                                        price = float(p)
+                                        break
+                    except Exception:
+                        continue
 
-                    if not price:
-                        for p_str in result.get("_prices", []):
-                            nums = re.findall(r"\d[\d\s]*\d", p_str)
-                            if nums:
-                                val = float(nums[0].replace(" ", ""))
-                                if val > 10:
-                                    price = val
+                if not price:
+                    for key, val in widget_states.items():
+                        try:
+                            val_str = str(val)
+                            prices = re.findall(r'"price":\s*(\d[\d\s]*\d)', val_str)
+                            if prices:
+                                p = float(prices[0].replace(" ", ""))
+                                if p > 0:
+                                    price = p
                                     break
+                        except Exception:
+                            continue
 
-                    image = result.get("og:image", "")
-
-                    if not price:
-                        html_debug = await page.content()
-                        log.warning(f"Ozon HTML snippet: {html_debug[2000:4000]}")
-                except Exception as e:
-                    log.error(f"Ozon JS parse error: {e}")
-
-                await browser.close()
+                log.info(f"Ozon result: title={title[:50]}, price={price}")
 
                 if price and price > 0:
-                    log.info(f"Ozon Playwright price: {price}")
-                    return {"title": title or "Товар Ozon", "price": price, "currency": "₽", "image": image}
-        except Exception as e:
-            log.error(f"Ozon Playwright error (attempt {attempt+1}): {e}")
+                    return {
+                        "title": title or "Товар Ozon",
+                        "price": price,
+                        "currency": "₽",
+                        "image": image,
+                    }
+    except Exception as e:
+        log.error(f"Ozon mobile API error: {e}")
 
     return None
 
