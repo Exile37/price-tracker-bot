@@ -18,6 +18,7 @@ async def init_db():
             user_id BIGINT PRIMARY KEY,
             username TEXT DEFAULT '',
             is_premium INTEGER DEFAULT 0,
+            custom_limit INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -65,14 +66,19 @@ async def init_db():
             FOREIGN KEY (used_by) REFERENCES users(user_id)
         )
     """)
+    try:
+        await pool.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_limit INTEGER DEFAULT 0")
+    except Exception:
+        pass
 
 
-async def add_user(user_id: int, username: str = ""):
+async def add_user(user_id: int, username: str = "") -> bool:
     pool = await _get_pool()
-    await pool.execute(
+    result = await pool.execute(
         "INSERT INTO users (user_id, username) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING",
         user_id, username
     )
+    return result == "INSERT 0 1"
 
 
 async def get_user(user_id: int):
@@ -202,3 +208,34 @@ async def use_premium_key(key: str, user_id: int) -> bool:
         user_id, row[0]
     )
     return True
+
+
+async def set_custom_limit(user_id: int, limit: int):
+    pool = await _get_pool()
+    await pool.execute(
+        "UPDATE users SET custom_limit = $1 WHERE user_id = $2",
+        limit, user_id
+    )
+
+
+async def get_all_users():
+    pool = await _get_pool()
+    return await pool.fetch("SELECT * FROM users ORDER BY created_at DESC")
+
+
+async def get_user_count() -> int:
+    pool = await _get_pool()
+    row = await pool.fetchrow("SELECT COUNT(*) FROM users")
+    return row[0]
+
+
+async def get_premium_user_count() -> int:
+    pool = await _get_pool()
+    row = await pool.fetchrow("SELECT COUNT(*) FROM users WHERE is_premium = 1")
+    return row[0]
+
+
+async def get_total_products() -> int:
+    pool = await _get_pool()
+    row = await pool.fetchrow("SELECT COUNT(*) FROM products WHERE is_active = 1")
+    return row[0]
