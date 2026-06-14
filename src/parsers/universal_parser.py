@@ -607,7 +607,9 @@ async def _parse_ozon(url: str) -> dict | None:
     await _fetch_free_proxies()
 
     for attempt in range(3):
-        proxy = _get_random_proxy()
+        ozon_cookies = _load_ozon_cookies()
+        use_proxy = not ozon_cookies
+        proxy = _get_random_proxy() if use_proxy else None
         try:
             from playwright.async_api import async_playwright
             from playwright_stealth import Stealth
@@ -619,6 +621,8 @@ async def _parse_ozon(url: str) -> dict | None:
             if proxy:
                 launch_args["proxy"] = {"server": proxy}
                 log.info(f"Ozon using proxy: {proxy}")
+            elif ozon_cookies:
+                log.info(f"Ozon using cookies (no proxy)")
 
             async with async_playwright() as p:
                 browser = await p.chromium.launch(**launch_args)
