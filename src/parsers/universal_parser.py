@@ -615,7 +615,7 @@ async def _parse_ozon(url: str) -> dict | None:
             from playwright_stealth import Stealth
 
             launch_args = {
-                "headless": "new",
+                "headless": True,
                 "args": [
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
@@ -665,6 +665,12 @@ async def _parse_ozon(url: str) -> dict | None:
                         log.error(f"Ozon cookie load error: {e}")
 
                 page = await context.new_page()
+                await page.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                    Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3]});
+                    Object.defineProperty(navigator, 'languages', {get: () => ['ru-RU', 'ru']});
+                    window.chrome = {runtime: {}};
+                """)
                 stealth = Stealth()
                 await stealth.apply_stealth_async(page)
 
@@ -896,6 +902,7 @@ async def parse_product(url: str) -> dict | None:
         result = await _parse_ozon(url)
         if result:
             return result
+        return {"error": "Ozon заблокировал запрос, попробуйте позже"}
 
     if "market.yandex.ru" in url or "market.yandex.ua" in url:
         result = await _parse_yandex_market(url)
