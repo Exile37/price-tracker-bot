@@ -595,11 +595,11 @@ async def _parse_ozon(url: str) -> dict | None:
     import logging
     log = logging.getLogger(__name__)
 
-    match = re.search(r"ozon\.ru/product/.*?-(\d+)/?", url)
+    match = re.search(r"ozon\.ru/product/.*?-(\d{7,})/?", url)
     if not match:
-        match = re.search(r"ozon\.ru/product/(\d+)", url)
+        match = re.search(r"ozon\.ru/product/(\d{7,})", url)
     if not match:
-        match = re.search(r"-(\d+)/?(?:\?|$)", url)
+        match = re.search(r"-(\d{7,})/?(?:\?|$)", url)
     if not match:
         return None
 
@@ -609,17 +609,16 @@ async def _parse_ozon(url: str) -> dict | None:
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             resp = await client.get(
-                "https://api.ozon.ru/composer-api.bx/page/json/v2",
+                "https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2",
                 params={"url": f"/product/{product_id}/"},
                 headers={
-                    "User-Agent": "ozonapp_android/17.31.0 (android 13; SDK 33)",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                     "Accept": "application/json",
+                    "Referer": "https://www.ozon.ru/",
                     "x-o3-app-name": "ozonapp_android",
-                    "x-o3-app-version": "17.31.0",
-                    "x-o3-device-type": "mobile",
                 },
             )
-            log.info(f"Ozon mobile API status={resp.status_code}")
+            log.info(f"Ozon API status={resp.status_code}")
             if resp.status_code == 200:
                 data = resp.json()
                 widget_states = data.get("widgetStates", {})
@@ -664,7 +663,7 @@ async def _parse_ozon(url: str) -> dict | None:
                     for key, val in widget_states.items():
                         try:
                             val_str = str(val)
-                            prices = re.findall(r'"price":\s*(\d[\d\s]*\d)', val_str)
+                            prices = re.findall(r'"price":\s*"?([\d.]+)"?', val_str)
                             if prices:
                                 p = float(prices[0].replace(" ", ""))
                                 if p > 0:
@@ -683,7 +682,7 @@ async def _parse_ozon(url: str) -> dict | None:
                         "image": image,
                     }
     except Exception as e:
-        log.error(f"Ozon mobile API error: {e}")
+        log.error(f"Ozon API error: {e}")
 
     return None
 
