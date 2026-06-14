@@ -574,21 +574,24 @@ def _parse_platform(soup: BeautifulSoup, domain: str) -> float | None:
 
 async def _resolve_short_url(url: str) -> str:
     try:
-        async with httpx.AsyncClient(timeout=5, follow_redirects=False) as client:
-            resp = await client.head(url, headers={"User-Agent": "Mozilla/5.0"})
-            location = resp.headers.get("location", "")
-            if location and location.startswith("http"):
-                return location
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+            current = url
+            for _ in range(10):
+                resp = await client.head(current, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=False)
+                location = resp.headers.get("location", "")
+                if not location:
+                    break
+                if location.startswith("/"):
+                    from urllib.parse import urlparse
+                    parsed = urlparse(current)
+                    location = f"{parsed.scheme}://{parsed.netloc}{location}"
+                if "/product/" in location or "/card/" in location:
+                    return location
+                current = location
+            return current
     except Exception:
         pass
-    try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-            resp = await client.get(url, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            })
-            return str(resp.url)
-    except Exception:
-        return url
+    return url
 
 
 async def _parse_ozon(url: str) -> dict | None:
