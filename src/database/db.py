@@ -1,31 +1,36 @@
-import asyncpg
-from config.settings import DATABASE_URL
+import aiosqlite
+import os
+from config.settings import DB_PATH
 
-_pool: asyncpg.Pool | None = None
+_db: aiosqlite.Connection | None = None
 
 
-async def _get_pool() -> asyncpg.Pool:
-    global _pool
-    if _pool is None:
-        _pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
-    return _pool
+async def _get_db() -> aiosqlite.Connection:
+    global _db
+    if _db is None:
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        _db = await aiosqlite.connect(DB_PATH)
+        _db.row_factory = aiosqlite.Row
+        await _db.execute("PRAGMA journal_mode=WAL")
+        await _db.execute("PRAGMA foreign_keys=ON")
+    return _db
 
 
 async def init_db():
-    pool = await _get_pool()
-    await pool.execute("""
+    db = await _get_db()
+    await db.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
+            user_id INTEGER PRIMARY KEY,
             username TEXT DEFAULT '',
             is_premium INTEGER DEFAULT 0,
             custom_limit INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    await pool.execute("""
+    await db.execute("""
         CREATE TABLE IF NOT EXISTS products (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
             url TEXT NOT NULL,
             title TEXT DEFAULT '',
             image_url TEXT DEFAULT '',
@@ -38,204 +43,222 @@ async def init_db():
             FOREIGN KEY (user_id) REFERENCES users(user_id)
         )
     """)
-    await pool.execute("""
+    await db.execute("""
         CREATE TABLE IF NOT EXISTS price_history (
-            id SERIAL PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             product_id INTEGER NOT NULL,
             price REAL NOT NULL,
             checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (product_id) REFERENCES products(id)
         )
     """)
-    await pool.execute("""
+    await db.execute("""
         CREATE TABLE IF NOT EXISTS referrals (
-            id SERIAL PRIMARY KEY,
-            referrer_id BIGINT NOT NULL,
-            referred_id BIGINT NOT NULL UNIQUE,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            referrer_id INTEGER NOT NULL,
+            referred_id INTEGER NOT NULL UNIQUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (referrer_id) REFERENCES users(user_id),
             FOREIGN KEY (referred_id) REFERENCES users(user_id)
         )
     """)
-    await pool.execute("""
+    await db.execute("""
         CREATE TABLE IF NOT EXISTS premium_keys (
-            id SERIAL PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             key TEXT UNIQUE NOT NULL,
-            used_by BIGINT,
+            used_by INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (used_by) REFERENCES users(user_id)
         )
     """)
-    try:
-        await pool.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_limit INTEGER DEFAULT 0")
-    except Exception:
-        pass
+    await db.commit()
 
 
 async def add_user(user_id: int, username: str = "") -> bool:
-    pool = await _get_pool()
-    result = await pool.execute(
-        "INSERT INTO users (user_id, username) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING",
-        user_id, username
+    db = await _get_db()
+    cursor = await db.execute(
+        "INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)",
+        (user_id, username)
     )
-    return result == "INSERT 0 1"
+    await db.commit()
+    return cursor.rowcount > 0
 
 
 async def get_user(user_id: int):
-    pool = await _get_pool()
-    return await pool.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
+    db = await _get_db()
+    async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
+        return await cursor.fetchone()
 
 
 async def get_user_product_count(user_id: int) -> int:
-    pool = await _get_pool()
-    row = await pool.fetchrow(
-        "SELECT COUNT(*) FROM products WHERE user_id = $1 AND is_active = 1",
-        user_id
-    )
-    return row[0]
+    db = await _get_db()
+    async with db.execute(
+        "SELECT COUNT(*) FROM products WHERE user_id = ? AND is_active = 1",
+        (user_id,)
+    ) as cursor:
+        row = await cursor.fetchone()
+        return row[0]
 
 
 async def add_product(user_id: int, url: str, title: str, image_url: str,
                        price: float, target_price: float = None, currency: str = "₽") -> int:
-    pool = await _get_pool()
-    product_id = await pool.fetchval(
+    db = await _get_db()
+    cursor = await db.execute(
         """INSERT INTO products (user_id, url, title, image_url, current_price, target_price, currency)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
-           RETURNING id""",
-        user_id, url, title, image_url, price, target_price, currency
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (user_id, url, title, image_url, price, target_price, currency)
     )
-    await pool.execute(
-        "INSERT INTO price_history (product_id, price) VALUES ($1, $2)",
-        product_id, price
+    product_id = cursor.lastrowid
+    await db.execute(
+        "INSERT INTO price_history (product_id, price) VALUES (?, ?)",
+        (product_id, price)
     )
+    await db.commit()
     return product_id
 
 
 async def update_price(product_id: int, new_price: float):
-    pool = await _get_pool()
-    await pool.execute(
-        """UPDATE products SET current_price = $1, last_checked = CURRENT_TIMESTAMP
-           WHERE id = $2""",
-        new_price, product_id
+    db = await _get_db()
+    await db.execute(
+        """UPDATE products SET current_price = ?, last_checked = CURRENT_TIMESTAMP
+           WHERE id = ?""",
+        (new_price, product_id)
     )
-    await pool.execute(
-        "INSERT INTO price_history (product_id, price) VALUES ($1, $2)",
-        product_id, new_price
+    await db.execute(
+        "INSERT INTO price_history (product_id, price) VALUES (?, ?)",
+        (product_id, new_price)
     )
+    await db.commit()
 
 
 async def get_active_products():
-    pool = await _get_pool()
-    return await pool.fetch(
+    db = await _get_db()
+    async with db.execute(
         "SELECT p.*, u.user_id FROM products p JOIN users u ON p.user_id = u.user_id WHERE p.is_active = 1"
-    )
+    ) as cursor:
+        return await cursor.fetchall()
 
 
 async def deactivate_product(product_id: int):
-    pool = await _get_pool()
-    await pool.execute("UPDATE products SET is_active = 0 WHERE id = $1", product_id)
+    db = await _get_db()
+    await db.execute("UPDATE products SET is_active = 0 WHERE id = ?", (product_id,))
+    await db.commit()
 
 
 async def get_user_products(user_id: int):
-    pool = await _get_pool()
-    return await pool.fetch(
-        "SELECT * FROM products WHERE user_id = $1 AND is_active = 1 ORDER BY created_at DESC",
-        user_id
-    )
+    db = await _get_db()
+    async with db.execute(
+        "SELECT * FROM products WHERE user_id = ? AND is_active = 1 ORDER BY created_at DESC",
+        (user_id,)
+    ) as cursor:
+        return await cursor.fetchall()
 
 
 async def get_price_history(product_id: int, limit: int = 30):
-    pool = await _get_pool()
-    return await pool.fetch(
+    db = await _get_db()
+    async with db.execute(
         """SELECT price, checked_at FROM price_history
-           WHERE product_id = $1 ORDER BY checked_at DESC LIMIT $2""",
-        product_id, limit
-    )
+           WHERE product_id = ? ORDER BY checked_at DESC LIMIT ?""",
+        (product_id, limit)
+    ) as cursor:
+        return await cursor.fetchall()
 
 
 async def set_premium(user_id: int, value: bool = True):
-    pool = await _get_pool()
-    await pool.execute(
-        "UPDATE users SET is_premium = $1 WHERE user_id = $2",
-        1 if value else 0, user_id
+    db = await _get_db()
+    await db.execute(
+        "UPDATE users SET is_premium = ? WHERE user_id = ?",
+        (1 if value else 0, user_id)
     )
+    await db.commit()
 
 
 async def add_referral(referrer_id: int, referred_id: int) -> bool:
-    pool = await _get_pool()
+    db = await _get_db()
     try:
-        await pool.execute(
-            "INSERT INTO referrals (referrer_id, referred_id) VALUES ($1, $2)",
-            referrer_id, referred_id
+        await db.execute(
+            "INSERT INTO referrals (referrer_id, referred_id) VALUES (?, ?)",
+            (referrer_id, referred_id)
         )
+        await db.commit()
         return True
-    except asyncpg.UniqueViolationError:
+    except Exception:
         return False
 
 
 async def get_referral_count(user_id: int) -> int:
-    pool = await _get_pool()
-    row = await pool.fetchrow(
-        "SELECT COUNT(*) FROM referrals WHERE referrer_id = $1", user_id
-    )
-    return row[0]
+    db = await _get_db()
+    async with db.execute(
+        "SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (user_id,)
+    ) as cursor:
+        row = await cursor.fetchone()
+        return row[0]
 
 
 async def get_referrer(user_id: int) -> int | None:
-    pool = await _get_pool()
-    row = await pool.fetchrow(
-        "SELECT referrer_id FROM referrals WHERE referred_id = $1", user_id
-    )
-    return row[0] if row else None
+    db = await _get_db()
+    async with db.execute(
+        "SELECT referrer_id FROM referrals WHERE referred_id = ?", (user_id,)
+    ) as cursor:
+        row = await cursor.fetchone()
+        return row[0] if row else None
 
 
 async def create_premium_key(key: str) -> bool:
-    pool = await _get_pool()
+    db = await _get_db()
     try:
-        await pool.execute("INSERT INTO premium_keys (key) VALUES ($1)", key)
+        await db.execute("INSERT INTO premium_keys (key) VALUES (?)", (key,))
+        await db.commit()
         return True
-    except asyncpg.UniqueViolationError:
+    except Exception:
         return False
 
 
 async def use_premium_key(key: str, user_id: int) -> bool:
-    pool = await _get_pool()
-    row = await pool.fetchrow("SELECT id, used_by FROM premium_keys WHERE key = $1", key)
-    if not row or row[1]:
-        return False
-    await pool.execute(
-        "UPDATE premium_keys SET used_by = $1 WHERE id = $2",
-        user_id, row[0]
-    )
-    return True
+    db = await _get_db()
+    async with db.execute("SELECT id, used_by FROM premium_keys WHERE key = ?", (key,)) as cursor:
+        row = await cursor.fetchone()
+        if not row or row[1]:
+            return False
+        await db.execute(
+            "UPDATE premium_keys SET used_by = ? WHERE id = ?",
+            (user_id, row[0])
+        )
+        await db.commit()
+        return True
 
 
 async def set_custom_limit(user_id: int, limit: int):
-    pool = await _get_pool()
-    await pool.execute(
-        "UPDATE users SET custom_limit = $1 WHERE user_id = $2",
-        limit, user_id
+    db = await _get_db()
+    await db.execute(
+        "UPDATE users SET custom_limit = ? WHERE user_id = ?",
+        (limit, user_id)
     )
+    await db.commit()
 
 
 async def get_all_users():
-    pool = await _get_pool()
-    return await pool.fetch("SELECT * FROM users ORDER BY created_at DESC")
+    db = await _get_db()
+    async with db.execute("SELECT * FROM users ORDER BY created_at DESC") as cursor:
+        return await cursor.fetchall()
 
 
 async def get_user_count() -> int:
-    pool = await _get_pool()
-    row = await pool.fetchrow("SELECT COUNT(*) FROM users")
-    return row[0]
+    db = await _get_db()
+    async with db.execute("SELECT COUNT(*) FROM users") as cursor:
+        row = await cursor.fetchone()
+        return row[0]
 
 
 async def get_premium_user_count() -> int:
-    pool = await _get_pool()
-    row = await pool.fetchrow("SELECT COUNT(*) FROM users WHERE is_premium = 1")
-    return row[0]
+    db = await _get_db()
+    async with db.execute("SELECT COUNT(*) FROM users WHERE is_premium = 1") as cursor:
+        row = await cursor.fetchone()
+        return row[0]
 
 
 async def get_total_products() -> int:
-    pool = await _get_pool()
-    row = await pool.fetchrow("SELECT COUNT(*) FROM products WHERE is_active = 1")
-    return row[0]
+    db = await _get_db()
+    async with db.execute("SELECT COUNT(*) FROM products WHERE is_active = 1") as cursor:
+        row = await cursor.fetchone()
+        return row[0]

@@ -21,4 +21,6 @@ RUN playwright install chromium
 
 COPY . .
 
+RUN mkdir -p data
+
 CMD ["python", "-m", "src.bot"]
