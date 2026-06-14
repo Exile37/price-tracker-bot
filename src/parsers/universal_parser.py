@@ -547,10 +547,11 @@ async def _parse_ozon(url: str) -> dict | None:
             await stealth.apply_stealth_async(page)
 
             try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                await page.goto(url, wait_until="networkidle", timeout=30000)
                 await page.wait_for_timeout(3000)
                 for _ in range(5):
-                    if "/product/" in page.url:
+                    cur = page.url
+                    if "/product/" in cur or "/cart/" not in cur:
                         break
                     await page.wait_for_timeout(2000)
             except Exception:
@@ -563,46 +564,52 @@ async def _parse_ozon(url: str) -> dict | None:
             title = None
 
             try:
-                title_el = await page.query_selector("h1")
-                if title_el:
-                    title = (await title_el.inner_text()).strip()
-            except Exception:
-                pass
+                result = await page.evaluate("""
+                    () => {
+                        const meta = {};
+                        document.querySelectorAll('meta').forEach(m => {
+                            const prop = m.getAttribute('property') || m.getAttribute('name') || '';
+                            if (prop.startsWith('og:') || prop === 'title') {
+                                meta[prop] = m.getAttribute('content') || '';
+                            }
+                        });
+                        const ld = document.querySelector('script[type="application/ld+json"]');
+                        if (ld) {
+                            try { meta._ld = JSON.parse(ld.textContent); } catch(e) {}
+                        }
+                        const h1 = document.querySelector('h1');
+                        meta._h1 = h1 ? h1.textContent.trim() : '';
+                        const allText = document.body.innerText;
+                        const prices = allText.match(/\\d[\\d\\s]*\\d\\s*₽/g) || [];
+                        meta._prices = prices.slice(0, 5);
+                        return meta;
+                    }
+                """)
+                log.info(f"Ozon page meta: {result.get('_h1', '')[:50]}, prices: {result.get('_prices', [])}")
 
-            price_selectors = [
-                "[data-widget='webPrice'] span",
-                ".pdp-order-price__current",
-                "span[data-v-6c9881e2]",
-                "[class*='price'] span",
-            ]
-            for sel in price_selectors:
-                try:
-                    el = await page.query_selector(sel)
-                    if el:
-                        txt = await el.inner_text()
-                        nums = re.findall(r"(\d[\d\s]*\d)", txt)
+                title = result.get("_h1") or result.get("og:title", "")
+
+                ld = result.get("_ld")
+                if ld and isinstance(ld, dict):
+                    offers = ld.get("offers", {})
+                    if isinstance(offers, list):
+                        offers = offers[0] if offers else {}
+                    p = offers.get("price") or offers.get("lowPrice")
+                    if p:
+                        price = float(p)
+
+                if not price:
+                    for p_str in result.get("_prices", []):
+                        nums = re.findall(r"\d[\d\s]*\d", p_str)
                         if nums:
-                            price = float(nums[0].replace(" ", ""))
-                            break
-                except Exception:
-                    pass
+                            val = float(nums[0].replace(" ", ""))
+                            if val > 10:
+                                price = val
+                                break
 
-            if not price:
-                try:
-                    text = await page.inner_text("body")
-                    found = re.findall(r"(\d[\d\s]*\d)\s*₽", text)
-                    if found:
-                        price = float(found[0].replace(" ", ""))
-                except Exception:
-                    pass
-
-            image = None
-            try:
-                og_img = await page.query_selector("meta[property='og:image']")
-                if og_img:
-                    image = await og_img.get_attribute("content")
-            except Exception:
-                pass
+                image = result.get("og:image", "")
+            except Exception as e:
+                log.error(f"Ozon JS parse error: {e}")
 
             await browser.close()
 
