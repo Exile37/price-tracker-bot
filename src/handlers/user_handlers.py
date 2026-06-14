@@ -6,8 +6,9 @@ from aiogram import Router, F, Bot
 from aiogram.types import (
     Message, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
-    LabeledPrice, PreCheckoutQuery, SuccessfulPayment
+    ReplyKeyboardMarkup, KeyboardButton,
+    LabeledPrice, PreCheckoutQuery, SuccessfulPayment,
+    BufferedInputFile
 )
 from aiogram.filters import CommandStart, Command
 
@@ -56,7 +57,6 @@ def _reply_kb() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="📋 Мои товары"), KeyboardButton(text="📊 График")],
             [KeyboardButton(text="⭐ Премиум"), KeyboardButton(text="🔗 Реферал")],
-            [KeyboardButton(text="❓ Помощь")],
         ],
         resize_keyboard=True,
     )
@@ -99,18 +99,15 @@ async def cmd_start(message: Message):
             if referrer_id != user_id:
                 success = await add_referral(referrer_id, user_id)
                 if success:
-                    await message.answer(
-                        "🎁 Ты был приглашён! +1 бесплатный товар к лимиту.",
-                    )
+                    await message.answer("🎁 Ты был приглашён! +1 товар к лимиту.")
         except Exception:
             pass
 
     await message.answer(
         "🛒 <b>Price Tracker</b>\n\n"
-        "Отправь ссылку на товар из любого магазина,\n"
+        "Отправь ссылку на товар с Wildberries,\n"
         "а я буду следить за ценой и сообщу, когда она упадёт!\n\n"
-        "Поддерживаю: Wildberries, Ozon, AliExpress,\n"
-        "Amazon, eBay, Avito, DNS, Citilink и др.",
+        "Просто вставь ссылку →",
         parse_mode="HTML",
         reply_markup=_reply_kb()
     )
@@ -121,7 +118,7 @@ async def cb_main_menu(callback_query: CallbackQuery):
     try:
         await callback_query.message.edit_text(
             "🛒 <b>Price Tracker</b>\n\n"
-            "Отправь ссылку на товар, и я отслежу цену!",
+            "Вставь ссылку на товар с Wildberries →",
             parse_mode="HTML",
             reply_markup=_main_menu_kb()
         )
@@ -135,10 +132,11 @@ async def cb_help(callback_query: CallbackQuery):
     try:
         await callback_query.message.edit_text(
             "📌 <b>Как пользоваться:</b>\n\n"
-            "1. Отправь ссылку на товар\n"
-            "2. Я покажу текущую цену\n"
+            "1. Скопируй ссылку на товар с Wildberries\n"
+            "2. Отправь её мне\n"
             "3. Нажми «Следить»\n"
-            "4. Буду проверять и оповещать об изменениях\n\n"
+            "4. Я буду проверять цену каждые 30 мин\n"
+            "5. Если цена упадёт — сразу сообщу!\n\n"
             "<b>Команды:</b>\n"
             "/start — главное меню",
             parse_mode="HTML",
@@ -156,7 +154,7 @@ async def cb_list(callback_query: CallbackQuery):
         try:
             await callback_query.message.edit_text(
                 "У тебя пока нет отслеживаемых товаров.\n\n"
-                "Отправь ссылку на товар, чтобы начать.",
+                "Отправь ссылку на товар с Wildberries.",
                 reply_markup=_back_kb()
             )
         except Exception:
@@ -167,7 +165,7 @@ async def cb_list(callback_query: CallbackQuery):
     buttons = []
     for p in products:
         price_str = f"{p['current_price']}{p['currency']}"
-        text = f"#{p['id']} {p['title'][:35]} — {price_str}"
+        text = f"{p['title'][:35]} — {price_str}"
         buttons.append([InlineKeyboardButton(text=text, callback_data=f"item:{p['id']}")])
     buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="main_menu")])
 
@@ -239,7 +237,7 @@ async def btn_my_products(message: Message):
     products = await get_user_products(message.from_user.id)
     if not products:
         await message.answer(
-            "У тебя пока нет отслеживаемых товаров.\n\nОтправь ссылку на товар, чтобы начать.",
+            "У тебя пока нет отслеживаемых товаров.\n\nОтправь ссылку на товар с Wildberries.",
             reply_markup=_reply_kb()
         )
         return
@@ -247,7 +245,7 @@ async def btn_my_products(message: Message):
     buttons = []
     for p in products:
         price_str = f"{p['current_price']}{p['currency']}"
-        text = f"#{p['id']} {p['title'][:35]} — {price_str}"
+        text = f"{p['title'][:35]} — {price_str}"
         buttons.append([InlineKeyboardButton(text=text, callback_data=f"item:{p['id']}")])
     buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="main_menu")])
 
@@ -262,20 +260,14 @@ async def btn_my_products(message: Message):
 async def btn_help(message: Message):
     await message.answer(
         "📌 <b>Как пользоваться:</b>\n\n"
-        "1. Отправь ссылку на товар\n"
-        "2. Я покажу текущую цену\n"
+        "1. Скопируй ссылку на товар с Wildberries\n"
+        "2. Отправь её мне\n"
         "3. Нажми «Следить»\n"
-        "4. Буду проверять и оповещать об изменениях\n\n"
-        "Поддерживаю: Wildberries, Ozon, AliExpress,\n"
-        "Amazon, eBay, Avito, DNS, Citilink и др.",
+        "4. Я буду проверять цену каждые 30 мин\n"
+        "5. Если цена упадёт — сразу сообщу!",
         parse_mode="HTML",
         reply_markup=_reply_kb()
     )
-
-
-@router.message(F.text == "🚫 Отмена")
-async def btn_cancel(message: Message):
-    await message.answer("Ок. Отправь ссылку на товар, когда будешь готов.", reply_markup=_reply_kb())
 
 
 @router.message(F.text == "📊 График")
@@ -287,7 +279,7 @@ async def btn_chart(message: Message):
     buttons = []
     for p in products:
         buttons.append([InlineKeyboardButton(
-            text=f"📊 #{p['id']} {p['title'][:35]}",
+            text=f"📊 {p['title'][:35]}",
             callback_data=f"chart:{p['id']}"
         )])
     buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="main_menu")])
@@ -313,11 +305,10 @@ async def cb_chart(callback_query: CallbackQuery):
         await callback_query.answer()
         return
 
-    from aiogram.types import BufferedInputFile
     file = BufferedInputFile(chart_buf.getvalue(), filename="chart.png")
     await callback_query.message.answer_photo(
         photo=file,
-        caption=f"📊 График цены #{product_id}",
+        caption=f"📊 График цены",
         reply_markup=_reply_kb()
     )
     await callback_query.answer()
@@ -335,8 +326,7 @@ async def btn_premium(message: Message):
         f"• 20 товаров вместо 3\n"
         f"• Графики цены\n"
         f"• Приоритетная проверка\n\n"
-        f"💰 Цена: <b>{STARS_PRICE} ⭐</b>\n\n"
-        f"Оплати Stars прямо в Telegram!",
+        f"💰 <b>{STARS_PRICE} ⭐/мес</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💳 Оплатить {STARS_PRICE} ⭐", callback_data="pay_premium")],
@@ -349,7 +339,7 @@ async def btn_premium(message: Message):
 async def cb_pay_premium(callback_query: CallbackQuery):
     await callback_query.message.answer_invoice(
         title="⭐ Премиум Price Tracker",
-        description=f"20 товаров вместо 3, графики, приоритетная проверка",
+        description="20 товаров вместо 3, графики, приоритетная проверка",
         payload="premium_subscription",
         currency="XTR",
         prices=[LabeledPrice(label="Премиум", amount=STARS_PRICE)],
@@ -420,7 +410,7 @@ async def btn_referral(message: Message):
     link = f"https://t.me/aut0teka_bot?start=ref_{user_id}"
     await message.answer(
         f"🔗 <b>Реферальная программа</b>\n\n"
-        f"Приглашай друзей — получай +1 товар к лимиту за каждого!\n\n"
+        f"Приглашай друзей — получай +1 товар к лимиту!\n\n"
         f"Твоя ссылка:\n<code>{link}</code>\n\n"
         f"Приглашено: <b>{count}</b> чел.",
         parse_mode="HTML",
@@ -442,7 +432,7 @@ async def cmd_admin(message: Message):
         f"📦 Товаров: <b>{total_products}</b>\n\n"
         f"<b>Команды:</b>\n"
         f"/admin_users — список пользователей\n"
-        f"/admin_setlimit <code>user_id количество</code> — задать лимит\n"
+        f"/admin_setlimit <code>user_id кол-во</code> — задать лимит\n"
         f"/admin_addkey — создать премиум-ключ\n"
         f"/admin_broadcast <code>текст</code> — рассылка всем",
         parse_mode="HTML"
@@ -475,13 +465,13 @@ async def cmd_admin_setlimit(message: Message):
         return
     parts = message.text.split()
     if len(parts) != 3:
-        await message.answer("Формат: /admin_setlimit <code>user_id количество</code>", parse_mode="HTML")
+        await message.answer("Формат: /admin_setlimit <code>user_id кол-во</code>", parse_mode="HTML")
         return
     try:
         target_id = int(parts[1])
         limit = int(parts[2])
     except ValueError:
-        await message.answer("Неверный формат. Используй числа.", parse_mode="HTML")
+        await message.answer("Неверный формат.", parse_mode="HTML")
         return
     user = await get_user(target_id)
     if not user:
@@ -489,7 +479,7 @@ async def cmd_admin_setlimit(message: Message):
         return
     await set_custom_limit(target_id, limit)
     await message.answer(
-        f"✅ Лимит для <code>{target_id}</code> установлен: <b>{limit}</b> товаров",
+        f"✅ Лимит для <code>{target_id}</code>: <b>{limit}</b> товаров",
         parse_mode="HTML"
     )
 
@@ -500,7 +490,7 @@ async def cmd_admin_broadcast(message: Message):
         return
     text = message.text.replace("/admin_broadcast", "", 1).strip()
     if not text:
-        await message.answer("Формат: /admin_broadcast <code>текст рассылки</code>", parse_mode="HTML")
+        await message.answer("Формат: /admin_broadcast <code>текст</code>", parse_mode="HTML")
         return
     users = await get_all_users()
     sent = 0
@@ -534,7 +524,17 @@ async def handle_message(message: Message):
     text = message.text.strip()
 
     if not _is_url(text):
-        await message.answer("Отправь ссылку на товар.", reply_markup=_main_menu_kb())
+        await message.answer("Отправь ссылку на товар с Wildberries.", reply_markup=_main_menu_kb())
+        return
+
+    if "wildberries.ru" not in text:
+        await message.answer(
+            "❌ Поддерживаются только ссылки Wildberries.\n\n"
+            "Отправь ссылку вида:\n"
+            "<code>https://wildberries.ru/catalog/12345678/</code>",
+            parse_mode="HTML",
+            reply_markup=_main_menu_kb()
+        )
         return
 
     user = await get_user(user_id)
@@ -588,14 +588,11 @@ async def handle_message(message: Message):
     ])
 
     image = result.get("image")
-    is_wb = "wildberries" in text.lower()
 
     caption = (
         f"📦 <b>{result['title'][:100]}</b>\n\n"
         f"💰 <b>{result['price']}{result['currency']}</b>"
     )
-    if is_wb:
-        caption += "\n\n⚠️ Цена WB может отличаться от приложения (зависит от региона и кошелька)"
 
     if image:
         try:
