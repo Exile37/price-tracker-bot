@@ -548,7 +548,11 @@ async def _parse_ozon(url: str) -> dict | None:
 
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                await page.wait_for_timeout(5000)
+                await page.wait_for_timeout(3000)
+                for _ in range(5):
+                    if "/product/" in page.url:
+                        break
+                    await page.wait_for_timeout(2000)
             except Exception:
                 pass
 
