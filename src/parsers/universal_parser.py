@@ -497,9 +497,162 @@ def _parse_platform(soup: BeautifulSoup, domain: str) -> float | None:
     return None
 
 
+async def _parse_ozon(url: str) -> dict | None:
+    import logging
+    log = logging.getLogger(__name__)
+
+    match = re.search(r"ozon\.ru/product/.*?-(\d+)/?", url)
+    if not match:
+        match = re.search(r"ozon\.ru/product/(\d+)", url)
+    if not match:
+        return None
+
+    product_id = match.group(1)
+    log.info(f"Ozon parsing product_id={product_id}")
+
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(
+                f"https://api.ozon.ru/composer-api.bx/page/json/v2",
+                params={"url": f"/product/{product_id}"},
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                    "Accept": "application/json",
+                    "x-requested-with": "XMLHttpRequest",
+                },
+            )
+            log.info(f"Ozon API status={resp.status_code}")
+            if resp.status_code == 200:
+                data = resp.json()
+                widget = data.get("widgetStates", {})
+                for key, val in widget.items():
+                    if "description" in key.lower() or "detail" in key.lower():
+                        try:
+                            w = json.loads(val) if isinstance(val, str) else val
+                            title = w.get("title") or w.get("name", "")
+                            price_raw = w.get("price") or w.get("actionPrice") or w.get("oldPrice", "")
+                            if price_raw:
+                                price_str = re.sub(r"[^\d,\.]", "", str(price_raw)).replace(",", ".")
+                                price = float(price_str) if price_str else None
+                                if price and price > 0:
+                                    image = w.get("image") or w.get("imageUrl", "")
+                                    log.info(f"Ozon widget price: {price}")
+                                    return {"title": title or "Товар Ozon", "price": price, "currency": "₽", "image": image}
+                        except Exception:
+                            pass
+    except Exception as e:
+        log.error(f"Ozon API error: {e}")
+
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(
+                "https://api.ozon.ru/composer-api.bx/page/json/v2",
+                params={"url": url.replace("https://ozon.ru", "").replace("https://www.ozon.ru", "")},
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                    "Accept": "application/json",
+                    "x-requested-with": "XMLHttpRequest",
+                },
+            )
+            log.info(f"Ozon page API status={resp.status_code}")
+            if resp.status_code == 200:
+                text = resp.text
+                price_match = re.search(r'"price":\s*"?(\d[\d\s]*\d)"?', text)
+                title_match = re.search(r'"title":\s*"([^"]{5,200})"', text)
+                if price_match:
+                    price = float(price_match.group(1).replace(" ", ""))
+                    title = title_match.group(1) if title_match else "Товар Ozon"
+                    log.info(f"Ozon regex price: {price}")
+                    return {"title": title, "price": price, "currency": "₽", "image": None}
+    except Exception as e:
+        log.error(f"Ozon page API error: {e}")
+
+    return None
+
+
+async def _parse_yandex_market(url: str) -> dict | None:
+    import logging
+    log = logging.getLogger(__name__)
+
+    match = re.search(r"market\.yandex\.ru/product/(\d+)", url)
+    if not match:
+        match = re.search(r"market\.yandex\.ru/(\d+)", url)
+    if not match:
+        return None
+
+    product_id = match.group(1)
+    log.info(f"Yandex Market parsing product_id={product_id}")
+
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(
+                f"https://market.yandex.ru/api/resolveProductOffer",
+                params={"productId": product_id},
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                    "Accept": "application/json",
+                    "Referer": "https://market.yandex.ru/",
+                },
+            )
+            log.info(f"Yandex Market API status={resp.status_code}")
+            if resp.status_code == 200:
+                data = resp.json()
+                offer = data.get("offer") or data.get("product", {})
+                title = offer.get("title") or offer.get("name", "")
+                price_data = offer.get("price") or offer.get("price", {})
+                if isinstance(price_data, dict):
+                    price_val = price_data.get("value") or price_data.get("price", 0)
+                else:
+                    price_val = price_data
+                if price_val and float(price_val) > 0:
+                    image = offer.get("image") or offer.get("picture", "")
+                    log.info(f"Yandex Market API price: {price_val}")
+                    return {"title": title or "Товар Яндекс Маркет", "price": float(price_val), "currency": "₽", "image": image}
+    except Exception as e:
+        log.error(f"Yandex Market API error: {e}")
+
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "ru-RU,ru;q=0.9",
+            })
+            log.info(f"Yandex Market page status={resp.status_code}")
+            if resp.status_code == 200:
+                text = resp.text
+                price_patterns = [
+                    r'"price":\s*\{[^}]*"value":\s*"?(\d[\d\s]*\d)"?',
+                    r'data-auto="price"[^>]*>(\d[\d\s]*\d)',
+                    r'"currentPrice":\s*"?(\d[\d\s]*\d)"?',
+                ]
+                for pattern in price_patterns:
+                    m = re.search(pattern, text)
+                    if m:
+                        price = float(m.group(1).replace(" ", ""))
+                        title_match = re.search(r'<h1[^>]*>([^<]+)</h1>', text)
+                        title = title_match.group(1).strip() if title_match else "Товар Яндекс Маркет"
+                        log.info(f"Yandex Market regex price: {price}")
+                        return {"title": title[:200], "price": price, "currency": "₽", "image": None}
+    except Exception as e:
+        log.error(f"Yandex Market page error: {e}")
+
+    return None
+
+
 async def parse_product(url: str) -> dict | None:
     if "wildberries.ru" in url:
         result = await _parse_wildberries(url)
+        if result:
+            return result
+
+    if "ozon.ru" in url:
+        result = await _parse_ozon(url)
+        if result:
+            return result
+
+    if "market.yandex.ru" in url or "market.yandex.ua" in url:
+        result = await _parse_yandex_market(url)
         if result:
             return result
 
