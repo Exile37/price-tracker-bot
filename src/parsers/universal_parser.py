@@ -609,10 +609,6 @@ async def _parse_ozon(url: str) -> dict | None:
         log.error(f"Ozon Playwright error: {e}")
 
     return None
-    except Exception as e:
-        log.error(f"Ozon page API error: {e}")
-
-    return None
 
 
 async def _parse_yandex_market(url: str) -> dict | None:
