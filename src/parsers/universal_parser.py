@@ -609,78 +609,56 @@ async def _parse_ozon(url: str) -> dict | None:
     if SCRAPER_API_KEY:
         for scraper_attempt in range(2):
             try:
+                target_url = f"https://www.ozon.ru/product/{product_id}/"
                 async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
                     resp = await client.get(
                         "https://api.scraperapi.com/",
                         params={
                             "api_key": SCRAPER_API_KEY,
-                            "url": f"https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2?url=/product/{product_id}/",
-                            "render": "false",
+                            "url": target_url,
+                            "render": "true",
                         },
                     )
                     log.info(f"Ozon ScraperAPI status={resp.status_code}, attempt={scraper_attempt+1}")
                     if resp.status_code == 200:
-                        data = resp.json()
-                        widget_states = data.get("widgetStates", {})
-                    log.info(f"Ozon ScraperAPI widgets: {list(widget_states.keys())[:10]}")
+                        html = resp.text
+                        log.info(f"Ozon ScraperAPI HTML length: {len(html)}")
 
-                    title = ""
-                    price = None
-                    image = ""
+                        title = ""
+                        price = None
+                        image = ""
 
-                    for key, val in widget_states.items():
-                        try:
-                            w = json.loads(val) if isinstance(val, str) else val
-                            if not isinstance(w, dict):
-                                continue
+                        title_match = re.search(r'<h1[^>]*>([^<]+)</h1>', html)
+                        if title_match:
+                            title = title_match.group(1).strip()
 
-                            if not title and "title" in w:
-                                t = w.get("title", "")
-                                if len(t) > 5:
-                                    title = t
+                        price_patterns = [
+                            r'"price":\s*\{[^}]*"amount":\s*"?(\d[\d\s]*\d)"?',
+                            r'"price":\s*"?(\d[\d\s]*\d)"?',
+                            r'data-widget="webPrice"[^>]*>.*?(\d[\d\s]*\d)\s*₽',
+                            r'(\d[\d\s]*\d)\s*₽',
+                        ]
+                        for pattern in price_patterns:
+                            m = re.search(pattern, html, re.DOTALL)
+                            if m:
+                                p = float(m.group(1).replace(" ", ""))
+                                if p > 10:
+                                    price = p
+                                    break
 
-                            if not image and "image" in w:
-                                img = w.get("image", "")
-                                if img and img.startswith("http"):
-                                    image = img
+                        img_match = re.search(r'<meta\s+property="og:image"\s+content="([^"]+)"', html)
+                        if img_match:
+                            image = img_match.group(1)
 
-                            if price is None:
-                                for price_key in ["price", "actionPrice", "oldPrice", "basePrice"]:
-                                    p = w.get(price_key)
-                                    if p:
-                                        if isinstance(p, dict):
-                                            p = p.get("amount") or p.get("value") or p.get("price", 0)
-                                        if isinstance(p, str):
-                                            p = p.replace(" ", "").replace(",", ".")
-                                            p = re.sub(r"[^\d.]", "", p)
-                                        if p and float(p) > 0:
-                                            price = float(p)
-                                            break
-                        except Exception:
-                            continue
+                        log.info(f"Ozon ScraperAPI result: title={title[:50]}, price={price}")
 
-                    if not price:
-                        for key, val in widget_states.items():
-                            try:
-                                val_str = str(val)
-                                prices = re.findall(r'"price":\s*"?([\d.]+)"?', val_str)
-                                if prices:
-                                    p = float(prices[0].replace(" ", ""))
-                                    if p > 0:
-                                        price = p
-                                        break
-                            except Exception:
-                                continue
-
-                    log.info(f"Ozon ScraperAPI result: title={title[:50]}, price={price}")
-
-                    if price and price > 0:
-                        return {
-                            "title": title or "Товар Ozon",
-                            "price": price,
-                            "currency": "₽",
-                            "image": image,
-                        }
+                        if price and price > 0:
+                            return {
+                                "title": title or "Товар Ozon",
+                                "price": price,
+                                "currency": "₽",
+                                "image": image,
+                            }
             except Exception as e:
                 log.error(f"Ozon ScraperAPI error: {type(e).__name__}: {e}")
 
