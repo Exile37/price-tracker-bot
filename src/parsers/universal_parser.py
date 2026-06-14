@@ -607,6 +607,64 @@ async def _parse_ozon(url: str) -> dict | None:
     log.info(f"Ozon parsing product_id={product_id}")
 
     if SCRAPER_API_KEY:
+        try:
+            target_url = f"https://www.ozon.ru/product/{product_id}/"
+            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+                resp = await client.get(
+                    "https://api.scraperapi.com/",
+                    params={
+                        "api_key": SCRAPER_API_KEY,
+                        "url": target_url,
+                        "render": "true",
+                    },
+                )
+                log.info(f"Ozon ScraperAPI status={resp.status_code}")
+                if resp.status_code == 200:
+                    html = resp.text
+                    log.info(f"Ozon ScraperAPI HTML length: {len(html)}")
+
+                    title = ""
+                    price = None
+                    image = ""
+
+                    title_match = re.search(r'<h1[^>]*>([^<]+)</h1>', html)
+                    if title_match:
+                        title = title_match.group(1).strip()
+
+                    price_patterns = [
+                        r'"price":\s*\{[^}]*"amount":\s*"?(\d[\d\s]*\d)"?',
+                        r'"price":\s*"?(\d[\d\s]*\d)"?',
+                        r'(\d[\d\s]*\d)\s*₽',
+                    ]
+                    for pattern in price_patterns:
+                        m = re.search(pattern, html, re.DOTALL)
+                        if m:
+                            p = float(m.group(1).replace(" ", ""))
+                            if p > 10:
+                                price = p
+                                break
+
+                    img_match = re.search(r'<meta\s+property="og:image"\s+content="([^"]+)"', html)
+                    if img_match:
+                        image = img_match.group(1)
+
+                    if price and price > 0:
+                        log.info(f"Ozon ScraperAPI success: price={price}")
+                        return {
+                            "title": title or "Товар Ozon",
+                            "price": price,
+                            "currency": "₽",
+                            "image": image,
+                        }
+        except Exception as e:
+            log.error(f"Ozon ScraperAPI error: {type(e).__name__}: {e}")
+
+    return None
+
+    product_id = match.group(1)
+    log.info(f"Ozon parsing product_id={product_id}")
+
+    if SCRAPER_API_KEY:
         for scraper_attempt in range(2):
             try:
                 target_url = f"https://www.ozon.ru/product/{product_id}/"
@@ -895,7 +953,7 @@ async def parse_product(url: str) -> dict | None:
         result = await _parse_ozon(url)
         if result:
             return result
-        return {"error": "Ozon заблокировал запрос, попробуйте позже"}
+        return {"error": "Ozon временно недоступен для отслеживания. Попробуйте ссылку с Wildberries или Яндекс Маркета."}
 
     if "market.yandex.ru" in url or "market.yandex.ua" in url:
         result = await _parse_yandex_market(url)
