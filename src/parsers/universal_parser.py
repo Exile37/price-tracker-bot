@@ -153,29 +153,29 @@ async def _wb_get_prices(nm_id: str) -> float | None:
             log.info(f"WB price-history status={resp.status_code}")
             if resp.status_code == 200:
                 try:
-                    raw = resp.text[:500]
-                    log.info(f"WB price-history body: {raw}")
                     data = resp.json()
-                    log.info(f"WB price-history keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+                    log.info(f"WB price-history type: {type(data).__name__}")
 
-                    top_price = data.get("price")
-                    if top_price and isinstance(top_price, (int, float)) and top_price > 0:
-                        log.info(f"WB top-level price: {top_price}")
-                        return top_price / 100
-
-                    history = data.get("history", [])
+                    history = data if isinstance(data, list) else data.get("history", [])
                     if history:
                         latest = history[-1]
-                        p = latest.get("price", 0)
-                        if p and p > 0:
-                            log.info(f"WB history price: {p}")
-                            return p / 100
+                        price_obj = latest.get("price", {})
+                        if isinstance(price_obj, dict):
+                            rub = price_obj.get("RUB", 0)
+                            if rub and rub > 0:
+                                log.info(f"WB price from history: {rub}")
+                                return rub / 100
+                        elif isinstance(price_obj, (int, float)) and price_obj > 0:
+                            return price_obj / 100
 
-                    for key in ["salePriceU", "sale", "currentPrice", "priceU"]:
-                        val = data.get(key)
-                        if val and isinstance(val, (int, float)) and val > 0:
-                            log.info(f"WB fallback key={key}: {val}")
-                            return val / 100 if val > 100 else val
+                    if isinstance(data, dict):
+                        top_price = data.get("price")
+                        if isinstance(top_price, (int, float)) and top_price > 0:
+                            return top_price / 100
+                        for key in ["salePriceU", "sale", "currentPrice", "priceU"]:
+                            val = data.get(key)
+                            if val and isinstance(val, (int, float)) and val > 0:
+                                return val / 100 if val > 100 else val
                 except Exception as e:
                     log.error(f"WB price-history parse error: {e}")
     except Exception as e:
