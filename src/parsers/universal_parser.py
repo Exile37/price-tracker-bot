@@ -1,9 +1,54 @@
 import re
 import json
 import uuid
+import random
+import logging
 import httpx
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
+from config.settings import PROXY_URL
+
+logger = logging.getLogger(__name__)
+
+_free_proxies: list[str] = []
+_proxy_index: int = 0
+
+
+async def _fetch_free_proxies() -> list[str]:
+    global _free_proxies
+    if _free_proxies:
+        return _free_proxies
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=RU&ssl=yes&anonymity=all"
+            )
+            if resp.status_code == 200:
+                lines = resp.text.strip().split("\n")
+                _free_proxies = [f"http://{line.strip()}" for line in lines if line.strip()]
+                logger.info(f"Fetched {len(_free_proxies)} free proxies")
+    except Exception as e:
+        logger.error(f"Failed to fetch proxies: {e}")
+    return _free_proxies
+
+
+def _get_random_proxy() -> str | None:
+    if PROXY_URL:
+        return PROXY_URL
+    if _free_proxies:
+        return random.choice(_free_proxies)
+    return None
+
+
+def _get_next_proxy() -> str | None:
+    global _proxy_index
+    if PROXY_URL:
+        return PROXY_URL
+    if _free_proxies:
+        proxy = _free_proxies[_proxy_index % len(_free_proxies)]
+        _proxy_index += 1
+        return proxy
+    return None
 
 
 async def fetch_page(url: str, use_browser: bool = False) -> str | None:
@@ -529,95 +574,104 @@ async def _parse_ozon(url: str) -> dict | None:
         if not match:
             return None
 
-    try:
-        from playwright.async_api import async_playwright
-        from playwright_stealth import Stealth
+    await _fetch_free_proxies()
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
-            )
-            context = await browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                locale="ru-RU",
-            )
-            page = await context.new_page()
-            stealth = Stealth()
-            await stealth.apply_stealth_async(page)
+    for attempt in range(3):
+        proxy = _get_random_proxy()
+        try:
+            from playwright.async_api import async_playwright
+            from playwright_stealth import Stealth
 
-            try:
-                await page.goto(url, wait_until="networkidle", timeout=30000)
-                await page.wait_for_timeout(3000)
-                for _ in range(5):
-                    cur = page.url
-                    if "/product/" in cur or "/cart/" not in cur:
-                        break
-                    await page.wait_for_timeout(2000)
-            except Exception:
-                pass
+            launch_args = {
+                "headless": True,
+                "args": ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+            }
+            if proxy:
+                launch_args["proxy"] = {"server": proxy}
+                log.info(f"Ozon using proxy: {proxy}")
 
-            resolved_url = page.url
-            log.info(f"Ozon resolved: {resolved_url}")
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(**launch_args)
+                context = await browser.new_context(
+                    viewport={"width": 1920, "height": 1080},
+                    locale="ru-RU",
+                )
+                page = await context.new_page()
+                stealth = Stealth()
+                await stealth.apply_stealth_async(page)
 
-            price = None
-            title = None
+                try:
+                    await page.goto(url, wait_until="networkidle", timeout=30000)
+                    await page.wait_for_timeout(3000)
+                    for _ in range(5):
+                        cur = page.url
+                        if "/product/" in cur or "/cart/" not in cur:
+                            break
+                        await page.wait_for_timeout(2000)
+                except Exception:
+                    pass
 
-            try:
-                result = await page.evaluate("""
-                    () => {
-                        const meta = {};
-                        document.querySelectorAll('meta').forEach(m => {
-                            const prop = m.getAttribute('property') || m.getAttribute('name') || '';
-                            if (prop.startsWith('og:') || prop === 'title') {
-                                meta[prop] = m.getAttribute('content') || '';
+                resolved_url = page.url
+                log.info(f"Ozon resolved (attempt {attempt+1}): {resolved_url}")
+
+                price = None
+                title = None
+
+                try:
+                    result = await page.evaluate("""
+                        () => {
+                            const meta = {};
+                            document.querySelectorAll('meta').forEach(m => {
+                                const prop = m.getAttribute('property') || m.getAttribute('name') || '';
+                                if (prop.startsWith('og:') || prop === 'title') {
+                                    meta[prop] = m.getAttribute('content') || '';
+                                }
+                            });
+                            const ld = document.querySelector('script[type="application/ld+json"]');
+                            if (ld) {
+                                try { meta._ld = JSON.parse(ld.textContent); } catch(e) {}
                             }
-                        });
-                        const ld = document.querySelector('script[type="application/ld+json"]');
-                        if (ld) {
-                            try { meta._ld = JSON.parse(ld.textContent); } catch(e) {}
+                            const h1 = document.querySelector('h1');
+                            meta._h1 = h1 ? h1.textContent.trim() : '';
+                            const allText = document.body.innerText;
+                            const prices = allText.match(/\\d[\\d\\s]*\\d\\s*₽/g) || [];
+                            meta._prices = prices.slice(0, 5);
+                            return meta;
                         }
-                        const h1 = document.querySelector('h1');
-                        meta._h1 = h1 ? h1.textContent.trim() : '';
-                        const allText = document.body.innerText;
-                        const prices = allText.match(/\\d[\\d\\s]*\\d\\s*₽/g) || [];
-                        meta._prices = prices.slice(0, 5);
-                        return meta;
-                    }
-                """)
-                log.info(f"Ozon page meta: {result.get('_h1', '')[:50]}, prices: {result.get('_prices', [])}")
+                    """)
+                    log.info(f"Ozon page meta: {result.get('_h1', '')[:50]}, prices: {result.get('_prices', [])}")
 
-                title = result.get("_h1") or result.get("og:title", "")
+                    title = result.get("_h1") or result.get("og:title", "")
 
-                ld = result.get("_ld")
-                if ld and isinstance(ld, dict):
-                    offers = ld.get("offers", {})
-                    if isinstance(offers, list):
-                        offers = offers[0] if offers else {}
-                    p = offers.get("price") or offers.get("lowPrice")
-                    if p:
-                        price = float(p)
+                    ld = result.get("_ld")
+                    if ld and isinstance(ld, dict):
+                        offers = ld.get("offers", {})
+                        if isinstance(offers, list):
+                            offers = offers[0] if offers else {}
+                        p = offers.get("price") or offers.get("lowPrice")
+                        if p:
+                            price = float(p)
 
-                if not price:
-                    for p_str in result.get("_prices", []):
-                        nums = re.findall(r"\d[\d\s]*\d", p_str)
-                        if nums:
-                            val = float(nums[0].replace(" ", ""))
-                            if val > 10:
-                                price = val
-                                break
+                    if not price:
+                        for p_str in result.get("_prices", []):
+                            nums = re.findall(r"\d[\d\s]*\d", p_str)
+                            if nums:
+                                val = float(nums[0].replace(" ", ""))
+                                if val > 10:
+                                    price = val
+                                    break
 
-                image = result.get("og:image", "")
-            except Exception as e:
-                log.error(f"Ozon JS parse error: {e}")
+                    image = result.get("og:image", "")
+                except Exception as e:
+                    log.error(f"Ozon JS parse error: {e}")
 
-            await browser.close()
+                await browser.close()
 
-            if price and price > 0:
-                log.info(f"Ozon Playwright price: {price}")
-                return {"title": title or "Товар Ozon", "price": price, "currency": "₽", "image": image}
-    except Exception as e:
-        log.error(f"Ozon Playwright error: {e}")
+                if price and price > 0:
+                    log.info(f"Ozon Playwright price: {price}")
+                    return {"title": title or "Товар Ozon", "price": price, "currency": "₽", "image": image}
+        except Exception as e:
+            log.error(f"Ozon Playwright error (attempt {attempt+1}): {e}")
 
     return None
 
