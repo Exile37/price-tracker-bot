@@ -150,27 +150,36 @@ async def _wb_get_prices(nm_id: str) -> float | None:
         api_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/info/price-history.json"
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(api_url, headers={"User-Agent": "Mozilla/5.0"})
+            log.info(f"WB price-history status={resp.status_code}")
             if resp.status_code == 200:
-                data = resp.json()
-                log.info(f"WB price-history response keys: {list(data.keys())}")
+                try:
+                    raw = resp.text[:500]
+                    log.info(f"WB price-history body: {raw}")
+                    data = resp.json()
+                    log.info(f"WB price-history keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
 
-                top_price = data.get("price")
-                if top_price and isinstance(top_price, (int, float)) and top_price > 0:
-                    return top_price / 100
+                    top_price = data.get("price")
+                    if top_price and isinstance(top_price, (int, float)) and top_price > 0:
+                        log.info(f"WB top-level price: {top_price}")
+                        return top_price / 100
 
-                history = data.get("history", [])
-                if history:
-                    latest = history[-1]
-                    p = latest.get("price", 0)
-                    if p and p > 0:
-                        return p / 100
+                    history = data.get("history", [])
+                    if history:
+                        latest = history[-1]
+                        p = latest.get("price", 0)
+                        if p and p > 0:
+                            log.info(f"WB history price: {p}")
+                            return p / 100
 
-                for key in ["salePriceU", "sale", "currentPrice", "priceU"]:
-                    val = data.get(key)
-                    if val and isinstance(val, (int, float)) and val > 0:
-                        return val / 100 if val > 100 else val
-    except Exception:
-        pass
+                    for key in ["salePriceU", "sale", "currentPrice", "priceU"]:
+                        val = data.get(key)
+                        if val and isinstance(val, (int, float)) and val > 0:
+                            log.info(f"WB fallback key={key}: {val}")
+                            return val / 100 if val > 100 else val
+                except Exception as e:
+                    log.error(f"WB price-history parse error: {e}")
+    except Exception as e:
+        log.error(f"WB price-history request error: {e}")
 
     return None
 
