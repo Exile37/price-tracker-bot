@@ -6,7 +6,7 @@ import logging
 import httpx
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
-from config.settings import PROXY_URL, OZON_COOKIES
+from config.settings import PROXY_URL, OZON_COOKIES, SCRAPER_API_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -605,6 +605,83 @@ async def _parse_ozon(url: str) -> dict | None:
 
     product_id = match.group(1)
     log.info(f"Ozon parsing product_id={product_id}")
+
+    if SCRAPER_API_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                resp = await client.get(
+                    "https://api.scraperapi.com/",
+                    params={
+                        "api_key": SCRAPER_API_KEY,
+                        "url": f"https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2?url=/product/{product_id}/",
+                        "render": "false",
+                    },
+                )
+                log.info(f"Ozon ScraperAPI status={resp.status_code}")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    widget_states = data.get("widgetStates", {})
+                    log.info(f"Ozon ScraperAPI widgets: {list(widget_states.keys())[:10]}")
+
+                    title = ""
+                    price = None
+                    image = ""
+
+                    for key, val in widget_states.items():
+                        try:
+                            w = json.loads(val) if isinstance(val, str) else val
+                            if not isinstance(w, dict):
+                                continue
+
+                            if not title and "title" in w:
+                                t = w.get("title", "")
+                                if len(t) > 5:
+                                    title = t
+
+                            if not image and "image" in w:
+                                img = w.get("image", "")
+                                if img and img.startswith("http"):
+                                    image = img
+
+                            if price is None:
+                                for price_key in ["price", "actionPrice", "oldPrice", "basePrice"]:
+                                    p = w.get(price_key)
+                                    if p:
+                                        if isinstance(p, dict):
+                                            p = p.get("amount") or p.get("value") or p.get("price", 0)
+                                        if isinstance(p, str):
+                                            p = p.replace(" ", "").replace(",", ".")
+                                            p = re.sub(r"[^\d.]", "", p)
+                                        if p and float(p) > 0:
+                                            price = float(p)
+                                            break
+                        except Exception:
+                            continue
+
+                    if not price:
+                        for key, val in widget_states.items():
+                            try:
+                                val_str = str(val)
+                                prices = re.findall(r'"price":\s*"?([\d.]+)"?', val_str)
+                                if prices:
+                                    p = float(prices[0].replace(" ", ""))
+                                    if p > 0:
+                                        price = p
+                                        break
+                            except Exception:
+                                continue
+
+                    log.info(f"Ozon ScraperAPI result: title={title[:50]}, price={price}")
+
+                    if price and price > 0:
+                        return {
+                            "title": title or "Товар Ozon",
+                            "price": price,
+                            "currency": "₽",
+                            "image": image,
+                        }
+        except Exception as e:
+            log.error(f"Ozon ScraperAPI error: {e}")
 
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
