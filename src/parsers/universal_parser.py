@@ -497,9 +497,32 @@ def _parse_platform(soup: BeautifulSoup, domain: str) -> float | None:
     return None
 
 
+async def _resolve_short_url(url: str) -> str:
+    try:
+        async with httpx.AsyncClient(timeout=5, follow_redirects=False) as client:
+            resp = await client.head(url, headers={"User-Agent": "Mozilla/5.0"})
+            location = resp.headers.get("location", "")
+            if location and location.startswith("http"):
+                return location
+    except Exception:
+        pass
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            })
+            return str(resp.url)
+    except Exception:
+        return url
+
+
 async def _parse_ozon(url: str) -> dict | None:
     import logging
     log = logging.getLogger(__name__)
+
+    if "/t/" in url or "/product/" not in url:
+        url = await _resolve_short_url(url)
+        log.info(f"Ozon resolved URL: {url}")
 
     match = re.search(r"ozon\.ru/product/.*?-(\d+)/?", url)
     if not match:
@@ -573,6 +596,10 @@ async def _parse_ozon(url: str) -> dict | None:
 async def _parse_yandex_market(url: str) -> dict | None:
     import logging
     log = logging.getLogger(__name__)
+
+    if "/product/" not in url and re.search(r"market\.yandex\.ru/[^/]*$", url):
+        url = await _resolve_short_url(url)
+        log.info(f"Yandex Market resolved URL: {url}")
 
     match = re.search(r"market\.yandex\.ru/product/(\d+)", url)
     if not match:
