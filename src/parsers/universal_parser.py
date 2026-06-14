@@ -607,21 +607,21 @@ async def _parse_ozon(url: str) -> dict | None:
     log.info(f"Ozon parsing product_id={product_id}")
 
     if SCRAPER_API_KEY:
-        try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                resp = await client.get(
-                    "https://api.scraperapi.com/",
-                    params={
-                        "api_key": SCRAPER_API_KEY,
-                        "url": f"https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2?url=/product/{product_id}/",
-                        "render": "false",
-                    },
-                )
-                log.info(f"Ozon ScraperAPI status={resp.status_code}")
-                log.info(f"Ozon ScraperAPI body: {resp.text[:500]}")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    widget_states = data.get("widgetStates", {})
+        for scraper_attempt in range(2):
+            try:
+                async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+                    resp = await client.get(
+                        "https://api.scraperapi.com/",
+                        params={
+                            "api_key": SCRAPER_API_KEY,
+                            "url": f"https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2?url=/product/{product_id}/",
+                            "render": "false",
+                        },
+                    )
+                    log.info(f"Ozon ScraperAPI status={resp.status_code}, attempt={scraper_attempt+1}")
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        widget_states = data.get("widgetStates", {})
                     log.info(f"Ozon ScraperAPI widgets: {list(widget_states.keys())[:10]}")
 
                     title = ""
@@ -681,8 +681,8 @@ async def _parse_ozon(url: str) -> dict | None:
                             "currency": "₽",
                             "image": image,
                         }
-        except Exception as e:
-            log.error(f"Ozon ScraperAPI error: {type(e).__name__}: {e}")
+            except Exception as e:
+                log.error(f"Ozon ScraperAPI error: {type(e).__name__}: {e}")
 
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
