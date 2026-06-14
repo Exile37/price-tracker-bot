@@ -615,8 +615,15 @@ async def _parse_ozon(url: str) -> dict | None:
             from playwright_stealth import Stealth
 
             launch_args = {
-                "headless": True,
-                "args": ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+                "headless": "new",
+                "args": [
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-setuid-sandbox",
+                    "--disable-infobars",
+                    "--window-size=1920,1080",
+                ]
             }
             if proxy:
                 launch_args["proxy"] = {"server": proxy}
@@ -629,6 +636,11 @@ async def _parse_ozon(url: str) -> dict | None:
                 context = await browser.new_context(
                     viewport={"width": 1920, "height": 1080},
                     locale="ru-RU",
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    extra_http_headers={
+                        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                    },
                 )
 
                 ozon_cookies = _load_ozon_cookies()
@@ -657,8 +669,8 @@ async def _parse_ozon(url: str) -> dict | None:
                 await stealth.apply_stealth_async(page)
 
                 try:
-                    await page.goto(url, wait_until="networkidle", timeout=30000)
-                    await page.wait_for_timeout(3000)
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    await page.wait_for_timeout(5000)
                     for _ in range(5):
                         cur = page.url
                         if "/product/" in cur or "/cart/" not in cur:
