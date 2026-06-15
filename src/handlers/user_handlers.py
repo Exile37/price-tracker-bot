@@ -5,8 +5,8 @@ import logging
 from aiogram import Router, F, Bot
 from aiogram.types import (
     Message, CallbackQuery,
-    InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton,
+    InlineKeyboardMarkup, KeyboardButton,
+    ReplyKeyboardMarkup, WebAppInfo,
     LabeledPrice, PreCheckoutQuery, SuccessfulPayment,
     BufferedInputFile
 )
@@ -21,7 +21,7 @@ from src.database.db import (
     get_total_products
 )
 from src.chart import generate_price_chart
-from config.settings import FREE_LIMIT, PREMIUM_LIMIT, ADMIN_ID, STARS_PRICE
+from config.settings import FREE_LIMIT, PREMIUM_LIMIT, ADMIN_ID, STARS_PRICE, WEBAPP_URL
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -53,13 +53,13 @@ def _main_menu_kb() -> InlineKeyboardMarkup:
 
 
 def _reply_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📋 Мои товары"), KeyboardButton(text="📊 График")],
-            [KeyboardButton(text="⭐ Премиум"), KeyboardButton(text="🔗 Реферал")],
-        ],
-        resize_keyboard=True,
-    )
+    buttons = [
+        [KeyboardButton(text="📋 Мои товары"), KeyboardButton(text="📊 График")],
+        [KeyboardButton(text="⭐ Премиум"), KeyboardButton(text="🔗 Реферал")],
+    ]
+    if WEBAPP_URL:
+        buttons.insert(0, [KeyboardButton(text="📱 Мой кабинет", web_app=WebAppInfo(url=WEBAPP_URL))])
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
 def _back_kb() -> InlineKeyboardMarkup:

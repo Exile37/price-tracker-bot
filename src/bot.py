@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
@@ -12,9 +13,19 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def start_web_server():
+    import uvicorn
+    from src.web.app import app
+    uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
+
+
 async def main():
     await init_db()
     logger.info("Database initialized")
+
+    web_thread = threading.Thread(target=start_web_server, daemon=True)
+    web_thread.start()
+    logger.info("Web server started on port 8080")
 
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
