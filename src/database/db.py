@@ -81,6 +81,9 @@ async def init_db():
         )
     """)
     await db.commit()
+
+
+async def add_user(user_id: int, username: str = "") -> bool:
     db = await _get_db()
     cursor = await db.execute(
         "INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)",
