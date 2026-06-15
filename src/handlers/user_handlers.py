@@ -55,6 +55,7 @@ def _main_menu_kb() -> InlineKeyboardMarkup:
 
 def _reply_kb() -> ReplyKeyboardMarkup:
     buttons = [
+        [KeyboardButton(text="📱 Мой кабинет")],
         [KeyboardButton(text="📋 Мои товары"), KeyboardButton(text="📊 График")],
         [KeyboardButton(text="⭐ Премиум"), KeyboardButton(text="🔗 Реферал")],
     ]

@@ -3,13 +3,14 @@ import os
 from config.settings import DB_PATH
 
 _db: aiosqlite.Connection | None = None
+_ABS_DB_PATH = os.path.join(os.getcwd(), DB_PATH)
 
 
 async def _get_db() -> aiosqlite.Connection:
     global _db
     if _db is None:
-        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-        _db = await aiosqlite.connect(DB_PATH)
+        os.makedirs(os.path.dirname(_ABS_DB_PATH), exist_ok=True)
+        _db = await aiosqlite.connect(_ABS_DB_PATH)
         _db.row_factory = aiosqlite.Row
         await _db.execute("PRAGMA journal_mode=WAL")
         await _db.execute("PRAGMA foreign_keys=ON")
