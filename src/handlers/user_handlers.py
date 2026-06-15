@@ -44,6 +44,17 @@ async def _get_pending(short_id: str) -> dict | None:
     return await get_pending(short_id)
 
 
+async def _peek_pending(short_id: str) -> dict | None:
+    import json
+    from src.database.db import _get_db
+    db = await _get_db()
+    async with db.execute("SELECT data FROM pending_urls WHERE short_id = ?", (short_id,)) as cursor:
+        row = await cursor.fetchone()
+        if row:
+            return json.loads(row[0])
+    return None
+
+
 def _main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📋 Мои товары", callback_data="list")],
@@ -650,7 +661,7 @@ async def _check_limit(user_id: int, is_premium: bool, user=None) -> bool:
 @router.callback_query(F.data.startswith("track:"))
 async def cb_track(callback_query: CallbackQuery):
     short_id = callback_query.data.split(":", 1)[1]
-    pending = await _get_pending(short_id)
+    pending = await _peek_pending(short_id)
 
     if not pending:
         try:
