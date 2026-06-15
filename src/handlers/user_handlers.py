@@ -21,7 +21,8 @@ from src.database.db import (
     set_custom_limit, get_all_users, get_user_count, get_premium_user_count,
     get_total_products, save_pending, get_pending,
     set_user_setting, get_user_settings, add_savings,
-    create_promocode, use_promocode, get_analytics
+    create_promocode, use_promocode, get_analytics,
+    block_user, unblock_user, is_blocked
 )
 from src.chart import generate_price_chart
 from config.settings import FREE_LIMIT, PREMIUM_LIMIT, ADMIN_ID, STARS_PRICE, WEBAPP_URL
@@ -631,17 +632,114 @@ async def cb_adm_users(callback_query: CallbackQuery):
         await callback_query.answer()
         return
     users = await get_all_users()
-    lines = []
-    for u in users[:15]:
-        status = "⭐" if u["is_premium"] else "👤"
+    buttons = []
+    for u in users[:10]:
         username = f"@{u['username']}" if u["username"] else str(u["user_id"])
-        lines.append(f"{status} {username}")
-    text = f"👥 <b>Пользователи ({len(users)}):</b>\n\n" + "\n".join(lines)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="adm_back")]
-    ])
-    await callback_query.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        status = "⭐" if u["is_premium"] else ("🚫" if u.get("is_blocked") else "👤")
+        buttons.append([InlineKeyboardButton(
+            text=f"{status} {username}",
+            callback_data=f"adm_user:{u['user_id']}"
+        )])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="adm_back")])
+    text = f"👥 <b>Пользователи ({len(users)}):</b>\n\nВыбери пользователя:"
+    await callback_query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     await callback_query.answer()
+
+
+@router.callback_query(F.data.startswith("adm_user:"))
+async def cb_adm_user(callback_query: CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer()
+        return
+    uid = int(callback_query.data.split(":")[1])
+    user = await get_user(uid)
+    if not user:
+        await callback_query.answer("Пользователь не найден")
+        return
+    username = f"@{user['username']}" if user["username"] else str(uid)
+    status = "⭐ Премиум" if user["is_premium"] else ("🚫 Заблокирован" if user.get("is_blocked") else "👤 Обычный")
+    limit = user["custom_limit"] if user["custom_limit"] else "по умолчанию"
+
+    blocked = user.get("is_blocked", 0) == 1
+    prem_btn = "❌ Снять премиум" if user["is_premium"] else "⭐ Выдать премиум"
+    block_btn = "✅ Разблокировать" if blocked else "🚫 Заблокировать"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=prem_btn, callback_data=f"adm_toggle_prem:{uid}")],
+        [InlineKeyboardButton(text=block_btn, callback_data=f"adm_toggle_block:{uid}")],
+        [InlineKeyboardButton(text="📦 Лимит товаров", callback_data=f"adm_setlimit:{uid}")],
+        [InlineKeyboardButton(text="◀️ К списку", callback_data="adm_users")],
+    ])
+    await callback_query.message.edit_text(
+        f"👤 <b>{username}</b>\n\n"
+        f"🆔 <code>{uid}</code>\n"
+        f"Статус: {status}\n"
+        f"Лимит: {limit}",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+    await callback_query.answer()
+
+
+@router.callback_query(F.data.startswith("adm_toggle_prem:"))
+async def cb_adm_toggle_prem(callback_query: CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer()
+        return
+    uid = int(callback_query.data.split(":")[1])
+    user = await get_user(uid)
+    new_state = not user["is_premium"]
+    await set_premium(uid, new_state)
+    status = "выдан" if new_state else "снят"
+    await callback_query.answer(f"Премиум {status}!")
+    await cb_adm_user(callback_query)
+
+
+@router.callback_query(F.data.startswith("adm_toggle_block:"))
+async def cb_adm_toggle_block(callback_query: CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer()
+        return
+    uid = int(callback_query.data.split(":")[1])
+    user = await get_user(uid)
+    blocked = user.get("is_blocked", 0) == 1
+    if blocked:
+        await unblock_user(uid)
+        await callback_query.answer("Пользователь разблокирован!")
+    else:
+        await block_user(uid)
+        await callback_query.answer("Пользователь заблокирован!")
+    await cb_adm_user(callback_query)
+
+
+@router.callback_query(F.data.startswith("adm_setlimit:"))
+async def cb_adm_setlimit(callback_query: CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer()
+        return
+    uid = int(callback_query.data.split(":")[1])
+    buttons = []
+    for n in [3, 5, 10, 15, 20, 50]:
+        buttons.append([InlineKeyboardButton(text=f"{n} товаров", callback_data=f"adm_limit:{uid}:{n}")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"adm_user:{uid}")])
+    await callback_query.message.edit_text(
+        "📦 Выбери лимит товаров:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+    await callback_query.answer()
+
+
+@router.callback_query(F.data.startswith("adm_limit:"))
+async def cb_adm_limit(callback_query: CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer()
+        return
+    parts = callback_query.data.split(":")
+    uid = int(parts[1])
+    limit = int(parts[2])
+    await set_custom_limit(uid, limit)
+    await callback_query.answer(f"Лимит установлен: {limit}")
+    await cb_adm_user(callback_query)
 
 
 @router.callback_query(F.data == "adm_premium")
@@ -851,6 +949,9 @@ async def cmd_admin_promo(message: Message):
 async def handle_message(message: Message):
     user_id = message.from_user.id
     text = message.text.strip()
+
+    if await is_blocked(user_id):
+        return
 
     if not _is_url(text):
         await message.answer("Отправь ссылку на товар с Wildberries.", reply_markup=_main_menu_kb())

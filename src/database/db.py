@@ -107,6 +107,10 @@ async def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    try:
+        await db.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER DEFAULT 0")
+    except Exception:
+        pass
     await db.commit()
 
 
@@ -398,3 +402,21 @@ async def get_analytics(user_id: int) -> dict:
         "rises": rises,
         "total_saved": round(total_saved, 2),
     }
+
+
+async def block_user(user_id: int):
+    db = await _get_db()
+    await db.execute("UPDATE users SET is_blocked = 1 WHERE user_id = ?", (user_id,))
+    await db.commit()
+
+
+async def unblock_user(user_id: int):
+    db = await _get_db()
+    await db.execute("UPDATE users SET is_blocked = 0 WHERE user_id = ?", (user_id,))
+    await db.commit()
+
+
+async def is_blocked(user_id: int) -> bool:
+    db = await _get_db()
+    row = await db.fetchrow("SELECT is_blocked FROM users WHERE user_id = ?", (user_id,))
+    return row and row[0] == 1
