@@ -649,13 +649,71 @@ async def cb_track(callback_query: CallbackQuery):
         await callback_query.answer()
         return
 
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎯 Указать целевую цену", callback_data=f"target:{short_id}")],
+        [InlineKeyboardButton(text="✅ Без цели", callback_data=f"track_now:{short_id}")],
+    ])
+
+    try:
+        await callback_query.message.edit_text(
+            f"💰 <b>{pending['title'][:80]}</b>\n\n"
+            f"Текущая цена: <b>{pending['price']}{pending['currency']}</b>\n\n"
+            "Хочешь установить целевую цену?\n"
+            "Я сообщу когда цена достигнет значения.",
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+    except Exception:
+        await callback_query.message.answer(
+            f"💰 <b>{pending['title'][:80]}</b>\n\n"
+            f"Текущая цена: <b>{pending['price']}{pending['currency']}</b>\n\n"
+            "Хочешь установить целевую цену?",
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+    await callback_query.answer()
+
+
+@router.callback_query(F.data.startswith("target:"))
+async def cb_target_price(callback_query: CallbackQuery):
+    short_id = callback_query.data.split(":", 1)[1]
+    pending = _get_pending(short_id)
+
+    if not pending:
+        await callback_query.message.edit_text("⏰ Время действия истекло.", reply_markup=_main_menu_kb())
+        await callback_query.answer()
+        return
+
+    _save_pending(short_id, {**pending, "_awaiting_target": True})
+
+    await callback_query.message.edit_text(
+        f"🎯 Введи целевую цену для:\n"
+        f"<b>{pending['title'][:60]}</b>\n\n"
+        f"Текущая: {pending['price']}{pending['currency']}\n\n"
+        "Напиши число (например: <code>500</code>) или «нет» чтобы пропустить:",
+        parse_mode="HTML"
+    )
+    await callback_query.answer()
+
+
+@router.callback_query(F.data.startswith("track_now:"))
+async def cb_track_now(callback_query: CallbackQuery):
+    short_id = callback_query.data.split(":", 1)[1]
+    pending = _get_pending(short_id)
+
+    if not pending:
+        await callback_query.message.edit_text("⏰ Время действия истекло.", reply_markup=_main_menu_kb())
+        await callback_query.answer()
+        return
+
     product_id = await add_product(
         user_id=callback_query.from_user.id,
         url=pending["url"],
         title=pending["title"],
         image_url=pending.get("image") or "",
         price=pending["price"],
-        currency=pending["currency"]
+        currency=pending["currency"],
+        target_price=pending.get("target_price"),
     )
 
     success_text = (
@@ -663,21 +721,89 @@ async def cb_track(callback_query: CallbackQuery):
         f"📦 {pending['title'][:80]}\n"
         f"💰 {pending['price']}{pending['currency']}\n"
         f"🆔 #{product_id}\n\n"
-        f"Буду проверять цену каждые 30 мин.\n"
-        f"Если цена упадёт — сообщу!"
     )
+    if pending.get("target_price"):
+        success_text += f"🎯 Цель: {pending['target_price']}{pending['currency']}\n\n"
+    success_text += "Буду проверять цену каждые 30 мин.\nЕсли цена упадёт — сообщу!"
 
     try:
         await callback_query.message.delete()
     except Exception:
         pass
 
-    await callback_query.message.answer(
-        success_text,
-        parse_mode="HTML",
-        reply_markup=_reply_kb()
-    )
+    await callback_query.message.answer(success_text, parse_mode="HTML", reply_markup=_reply_kb())
     await callback_query.answer()
+
+
+@router.message(F.text.regexp(r"^\d+([.,]\d+)?$"))
+async def handle_target_price(message: Message):
+    user_id = message.from_user.id
+
+    for sid, data in list(pending_urls.items()):
+        if data.get("_awaiting_target") and sid.startswith(str(user_id)[-4:]):
+            pass
+
+    target = message.text.replace(",", ".").strip()
+    try:
+        target_val = float(target)
+    except ValueError:
+        return
+
+    for sid, data in list(pending_urls.items()):
+        if data.get("_awaiting_target"):
+            data["target_price"] = target_val
+            data.pop("_awaiting_target", None)
+
+            product_id = await add_product(
+                user_id=user_id,
+                url=data["url"],
+                title=data["title"],
+                image_url=data.get("image") or "",
+                price=data["price"],
+                currency=data["currency"],
+                target_price=target_val,
+            )
+
+            success_text = (
+                f"✅ <b>Товар добавлен!</b>\n\n"
+                f"📦 {data['title'][:80]}\n"
+                f"💰 {data['price']}{data['currency']}\n"
+                f"🎯 Цель: {target_val}{data['currency']}\n"
+                f"🆔 #{product_id}\n\n"
+                "Буду проверять цену каждые 30 мин.\n"
+                "Как только цена достигнет цели — сообщу!"
+            )
+
+            await message.answer(success_text, parse_mode="HTML", reply_markup=_reply_kb())
+            return
+
+    for sid, data in list(pending_urls.items()):
+        if data.get("user_id") == user_id and data.get("_awaiting_target"):
+            data["target_price"] = target_val
+            data.pop("_awaiting_target", None)
+
+            product_id = await add_product(
+                user_id=user_id,
+                url=data["url"],
+                title=data["title"],
+                image_url=data.get("image") or "",
+                price=data["price"],
+                currency=data["currency"],
+                target_price=target_val,
+            )
+
+            success_text = (
+                f"✅ <b>Товар добавлен!</b>\n\n"
+                f"📦 {data['title'][:80]}\n"
+                f"💰 {data['price']}{data['currency']}\n"
+                f"🎯 Цель: {target_val}{data['currency']}\n"
+                f"🆔 #{product_id}\n\n"
+                "Буду проверять цену каждые 30 мин.\n"
+                "Как только цена достигнет цели — сообщу!"
+            )
+
+            await message.answer(success_text, parse_mode="HTML", reply_markup=_reply_kb())
+            return
 
 
 @router.callback_query(F.data == "cancel_track")
