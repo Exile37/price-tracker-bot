@@ -1,7 +1,7 @@
 import logging
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-from src.database.db import get_user_products, get_price_history
+from src.database.db import get_user_products, get_price_history, deactivate_product, get_analytics, get_user_settings
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,24 @@ async def api_history(product_id: int):
     history = await get_price_history(product_id, limit=60)
     result = [{"price": h["price"], "date": str(h["checked_at"])} for h in history]
     return {"history": result}
+
+
+@app.delete("/api/products/{product_id}")
+async def api_delete_product(product_id: int):
+    await deactivate_product(product_id)
+    return {"ok": True}
+
+
+@app.get("/api/analytics/{user_id}")
+async def api_analytics(user_id: int):
+    a = await get_analytics(user_id)
+    settings = await get_user_settings(user_id)
+    return {
+        "analytics": a,
+        "min_drop_pct": settings[0] if settings else 5,
+        "check_interval": settings[1] if settings else 30,
+        "total_saved": settings[2] if settings else 0,
+    }
 
 
 HTML_PAGE = """<!DOCTYPE html>
@@ -131,6 +149,15 @@ HTML_PAGE = """<!DOCTYPE html>
             cursor: pointer;
             font-size: 12px;
         }
+        .btn-delete {
+            background: #3a1a1a;
+            border: none;
+            color: #ff6b6b;
+            padding: 8px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 12px;
+        }
         .chart-modal {
             display: none;
             position: fixed;
@@ -181,6 +208,10 @@ HTML_PAGE = """<!DOCTYPE html>
             <div class="stat-value" id="dropped">-</div>
             <div class="stat-label">Снижений</div>
         </div>
+        <div class="stat-card">
+            <div class="stat-value" id="saved">-</div>
+            <div class="stat-label">Сэкономлено</div>
+        </div>
     </div>
 
     <div class="product-list" id="products">
@@ -209,9 +240,26 @@ HTML_PAGE = """<!DOCTYPE html>
                 const resp = await fetch(`/api/products/${userId}`);
                 const data = await resp.json();
                 renderProducts(data.products);
+                loadAnalytics();
             } catch (e) {
                 document.getElementById('products').innerHTML = '<div class="empty"><div class="empty-icon">📦</div>Нет товаров</div>';
             }
+        }
+
+        async function loadAnalytics() {
+            try {
+                const resp = await fetch(`/api/analytics/${userId}`);
+                const data = await resp.json();
+                const a = data.analytics;
+                document.getElementById('dropped').textContent = a.drops;
+                document.getElementById('saved').textContent = data.total_saved + '₽';
+            } catch (e) {}
+        }
+
+        async function deleteProduct(productId) {
+            if (!confirm('Удалить товар?')) return;
+            await fetch(`/api/products/${productId}`, { method: 'DELETE' });
+            loadProducts();
         }
 
         function renderProducts(products) {
@@ -232,6 +280,7 @@ HTML_PAGE = """<!DOCTYPE html>
                         ${p.target_price ? `<div class="product-target">🎯 Цель: ${p.target_price}${p.currency}</div>` : ''}
                     </div>
                     <button class="btn-chart" onclick="showChart(${p.id})">📊</button>
+                    <button class="btn-delete" onclick="deleteProduct(${p.id})">🗑</button>
                 </div>
             `).join('');
         }

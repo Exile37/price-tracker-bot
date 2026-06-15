@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timedelta
 from aiogram import Bot
 from src.parsers.universal_parser import parse_product
-from src.database.db import get_active_products, update_price, get_user_products, get_all_users
+from src.database.db import get_active_products, update_price, get_user_products, get_all_users, get_user_settings, add_savings
 from config.settings import BOT_TOKEN
 
 logger = logging.getLogger(__name__)
@@ -34,6 +34,9 @@ async def check_prices():
                 diff = old_price - new_price
                 pct = (diff / old_price) * 100
 
+                settings = await get_user_settings(user_id)
+                min_drop = settings[0] if settings and settings[0] else 5
+
                 if user_id not in daily_cache:
                     daily_cache[user_id] = []
                 daily_cache[user_id].append({
@@ -44,6 +47,11 @@ async def check_prices():
                     "currency": currency,
                     "target": target_price,
                 })
+
+                await add_savings(user_id, diff)
+
+                if pct < min_drop:
+                    continue
 
                 msg = (
                     f"📉 <b>Цена упала!</b>\n\n"

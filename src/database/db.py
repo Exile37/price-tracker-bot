@@ -72,11 +72,38 @@ async def init_db():
             FOREIGN KEY (used_by) REFERENCES users(user_id)
         )
     """)
+    try:
+        await db.execute("ALTER TABLE users ADD COLUMN min_drop_pct INTEGER DEFAULT 5")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE users ADD COLUMN check_interval INTEGER DEFAULT 30")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE users ADD COLUMN total_savings REAL DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE users ADD COLUMN promo_used TEXT DEFAULT ''")
+    except Exception:
+        pass
+    await db.commit()
     await db.execute("""
         CREATE TABLE IF NOT EXISTS pending_urls (
             short_id TEXT PRIMARY KEY,
             user_id INTEGER NOT NULL,
             data TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS promocodes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT UNIQUE NOT NULL,
+            discount_days INTEGER DEFAULT 0,
+            bonus_products INTEGER DEFAULT 0,
+            used_by INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -293,3 +320,81 @@ async def get_pending(short_id: str) -> dict | None:
             await db.commit()
             return json.loads(row[0])
     return None
+
+
+async def set_user_setting(user_id: int, key: str, value):
+    db = await _get_db()
+    await db.execute(f"UPDATE users SET {key} = ? WHERE user_id = ?", (value, user_id))
+    await db.commit()
+
+
+async def get_user_settings(user_id: int):
+    db = await _get_db()
+    return await db.fetchrow(
+        "SELECT min_drop_pct, check_interval, total_savings, promo_used FROM users WHERE user_id = ?",
+        (user_id,)
+    )
+
+
+async def add_savings(user_id: int, amount: float):
+    db = await _get_db()
+    await db.execute(
+        "UPDATE users SET total_savings = total_savings + ? WHERE user_id = ?",
+        (amount, user_id)
+    )
+    await db.commit()
+
+
+async def create_promocode(code: str, discount_days: int = 0, bonus_products: int = 0) -> bool:
+    db = await _get_db()
+    try:
+        await db.execute(
+            "INSERT INTO promocodes (code, discount_days, bonus_products) VALUES (?, ?, ?)",
+            (code, discount_days, bonus_products)
+        )
+        await db.commit()
+        return True
+    except Exception:
+        return False
+
+
+async def use_promocode(code: str, user_id: int) -> dict | None:
+    db = await _get_db()
+    row = await db.fetchrow(
+        "SELECT id, discount_days, bonus_products, used_by FROM promocodes WHERE code = ?",
+        (code,)
+    )
+    if not row or row[3]:
+        return None
+    await db.execute("UPDATE promocodes SET used_by = ? WHERE id = ?", (user_id, row[0]))
+    await db.commit()
+    return {"discount_days": row[1], "bonus_products": row[2]}
+
+
+async def get_analytics(user_id: int) -> dict:
+    db = await _get_db()
+    products = await db.fetch(
+        "SELECT p.*, ph.price as first_price FROM products p "
+        "LEFT JOIN price_history ph ON ph.product_id = p.id AND ph.id = "
+        "(SELECT MIN(id) FROM price_history WHERE product_id = p.id) "
+        "WHERE p.user_id = ? AND p.is_active = 1",
+        (user_id,)
+    )
+    total = len(products)
+    drops = 0
+    rises = 0
+    total_saved = 0
+    for p in products:
+        if p["first_price"] and p["current_price"]:
+            diff = p["first_price"] - p["current_price"]
+            if diff > 0:
+                drops += 1
+                total_saved += diff
+            elif diff < 0:
+                rises += 1
+    return {
+        "total": total,
+        "drops": drops,
+        "rises": rises,
+        "total_saved": round(total_saved, 2),
+    }

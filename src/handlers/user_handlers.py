@@ -19,7 +19,9 @@ from src.database.db import (
     get_user_products, deactivate_product, get_price_history,
     add_referral, get_referral_count, set_premium, use_premium_key,
     set_custom_limit, get_all_users, get_user_count, get_premium_user_count,
-    get_total_products, save_pending, get_pending
+    get_total_products, save_pending, get_pending,
+    set_user_setting, get_user_settings, add_savings,
+    create_promocode, use_promocode, get_analytics
 )
 from src.chart import generate_price_chart
 from config.settings import FREE_LIMIT, PREMIUM_LIMIT, ADMIN_ID, STARS_PRICE, WEBAPP_URL
@@ -58,6 +60,7 @@ async def _peek_pending(short_id: str) -> dict | None:
 def _main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📋 Мои товары", callback_data="list")],
+        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings")],
         [InlineKeyboardButton(text="❓ Помощь", callback_data="help")],
     ])
 
@@ -446,6 +449,157 @@ async def btn_referral(message: Message):
     )
 
 
+@router.callback_query(F.data == "settings")
+async def cb_settings(callback_query: CallbackQuery):
+    settings = await get_user_settings(callback_query.from_user.id)
+    min_drop = settings[0] if settings else 5
+    interval = settings[1] if settings else 30
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"📉 Мин. падение: {min_drop}%", callback_data="set_drop")],
+        [InlineKeyboardButton(text=f"⏰ Интервал: {interval} мин", callback_data="set_interval")],
+        [InlineKeyboardButton(text="🎁 Активировать промокод", callback_data="use_promo")],
+        [InlineKeyboardButton(text="📊 Моя аналитика", callback_data="analytics")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="main_menu")],
+    ])
+    try:
+        await callback_query.message.edit_text(
+            "⚙️ <b>Настройки</b>\n\n"
+            f"📉 Мин. падение для уведомления: <b>{min_drop}%</b>\n"
+            f"⏰ Интервал проверки: <b>{interval} мин</b>",
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+    except Exception:
+        await callback_query.message.answer(
+            "⚙️ <b>Настройки</b>",
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+    await callback_query.answer()
+
+
+@router.callback_query(F.data == "set_drop")
+async def cb_set_drop(callback_query: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1%", callback_data="drop:1"),
+         InlineKeyboardButton(text="3%", callback_data="drop:3"),
+         InlineKeyboardButton(text="5%", callback_data="drop:5")],
+        [InlineKeyboardButton(text="10%", callback_data="drop:10"),
+         InlineKeyboardButton(text="15%", callback_data="drop:15"),
+         InlineKeyboardButton(text="20%", callback_data="drop:20")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="settings")],
+    ])
+    await callback_query.message.edit_text(
+        "📉 Выбери минимальное падение цены для уведомления:",
+        reply_markup=kb
+    )
+    await callback_query.answer()
+
+
+@router.callback_query(F.data.startswith("drop:"))
+async def cb_drop_selected(callback_query: CallbackQuery):
+    pct = int(callback_query.data.split(":")[1])
+    await set_user_setting(callback_query.from_user.id, "min_drop_pct", pct)
+    await callback_query.message.edit_text(
+        f"✅ Уведомлять при падении > <b>{pct}%</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="settings")]
+        ])
+    )
+    await callback_query.answer()
+
+
+@router.callback_query(F.data == "set_interval")
+async def cb_set_interval(callback_query: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="15 мин", callback_data="interval:15"),
+         InlineKeyboardButton(text="30 мин", callback_data="interval:30"),
+         InlineKeyboardButton(text="1 час", callback_data="interval:60")],
+        [InlineKeyboardButton(text="3 часа", callback_data="interval:180"),
+         InlineKeyboardButton(text="6 часов", callback_data="interval:360")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="settings")],
+    ])
+    await callback_query.message.edit_text(
+        "⏰ Выбери интервал проверки цен:",
+        reply_markup=kb
+    )
+    await callback_query.answer()
+
+
+@router.callback_query(F.data.startswith("interval:"))
+async def cb_interval_selected(callback_query: CallbackQuery):
+    mins = int(callback_query.data.split(":")[1])
+    await set_user_setting(callback_query.from_user.id, "check_interval", mins)
+    h = mins // 60
+    m = mins % 60
+    text = f"{h} ч {m} мин" if h else f"{m} мин"
+    await callback_query.message.edit_text(
+        f"✅ Интервал проверки: <b>{text}</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="settings")]
+        ])
+    )
+    await callback_query.answer()
+
+
+@router.callback_query(F.data == "use_promo")
+async def cb_use_promo(callback_query: CallbackQuery):
+    await callback_query.message.edit_text(
+        "🎁 Отправь промокод:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="settings")]
+        ])
+    )
+    await callback_query.answer()
+
+
+@router.message(F.text.startswith("PROMO-"))
+async def handle_promocode(message: Message):
+    code = message.text.strip().upper()
+    result = await use_promocode(code, message.from_user.id)
+    if result:
+        bonus = result["bonus_products"]
+        if bonus:
+            user = await get_user(message.from_user.id)
+            current = user["custom_limit"] if user else 0
+            await set_user_setting(message.from_user.id, "custom_limit", current + bonus)
+            await message.answer(
+                f"🎉 Промокод активирован!\n\n"
+                f"📦 +{bonus} товаров к лимиту",
+                reply_markup=_reply_kb()
+            )
+        else:
+            await message.answer("🎉 Промокод активирован!", reply_markup=_reply_kb())
+    else:
+        await message.answer("❌ Неверный или уже использованный промокод.", reply_markup=_reply_kb())
+
+
+@router.callback_query(F.data == "analytics")
+async def cb_analytics(callback_query: CallbackQuery):
+    a = await get_analytics(callback_query.from_user.id)
+    settings = await get_user_settings(callback_query.from_user.id)
+    saved = settings[2] if settings else 0
+
+    text = (
+        f"📊 <b>Моя аналитика</b>\n\n"
+        f"📦 Товаров: <b>{a['total']}</b>\n"
+        f"📉 Подешевело: <b>{a['drops']}</b>\n"
+        f"📈 Подорожало: <b>{a['rises']}</b>\n"
+        f"💰 Сэкономлено: <b>{saved:.0f}₽</b>"
+    )
+    await callback_query.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="settings")]
+        ])
+    )
+    await callback_query.answer()
+
+
 @router.message(Command("admin"))
 async def cmd_admin(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -544,6 +698,23 @@ async def cmd_admin_addkey(message: Message):
     from src.database.db import create_premium_key
     await create_premium_key(key)
     await message.answer(f"🔑 Новый ключ:\n<code>{key}</code>", parse_mode="HTML")
+
+
+@router.message(Command("admin_promo"))
+async def cmd_admin_promo(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    parts = message.text.split()
+    if len(parts) < 3:
+        await message.answer("Формат: /admin_promo <code>КОД БОНУС</code>\nБонус = кол-во товаров", parse_mode="HTML")
+        return
+    code = parts[1].upper()
+    bonus = int(parts[2])
+    success = await create_promocode(code, bonus_products=bonus)
+    if success:
+        await message.answer(f"🎁 Промокод создан:\n<code>{code}</code>\n📦 Бонус: +{bonus} товаров", parse_mode="HTML")
+    else:
+        await message.answer("❌ Промокод уже существует.", parse_mode="HTML")
 
 
 @router.message(F.text)
