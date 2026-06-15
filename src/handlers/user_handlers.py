@@ -635,7 +635,7 @@ async def cb_adm_users(callback_query: CallbackQuery):
     buttons = []
     for u in users[:8]:
         username = f"@{u['username']}" if u["username"] else str(u["user_id"])
-        status = "⭐" if u["is_premium"] else ("🚫" if u.get("is_blocked") else "👤")
+        status = "⭐" if u["is_premium"] else ("🚫" if u["is_blocked"] else "👤")
         buttons.append([InlineKeyboardButton(
             text=f"{status} {username}",
             callback_data=f"adm_user:{u['user_id']}"
@@ -660,10 +660,10 @@ async def cb_adm_user(callback_query: CallbackQuery):
         await callback_query.answer("Пользователь не найден")
         return
     username = f"@{user['username']}" if user["username"] else str(uid)
-    status = "⭐ Премиум" if user["is_premium"] else ("🚫 Заблокирован" if user.get("is_blocked") else "👤 Обычный")
+    status = "⭐ Премиум" if user["is_premium"] else ("🚫 Заблокирован" if user["is_blocked"] else "👤 Обычный")
     limit = user["custom_limit"] if user["custom_limit"] else "по умолчанию"
 
-    blocked = user.get("is_blocked", 0) == 1
+    blocked = user["is_blocked"] == 1
     prem_btn = "❌ Снять премиум" if user["is_premium"] else "⭐ Выдать премиум"
     block_btn = "✅ Разблокировать" if blocked else "🚫 Заблокировать"
 
@@ -705,7 +705,7 @@ async def cb_adm_toggle_block(callback_query: CallbackQuery):
         return
     uid = int(callback_query.data.split(":")[1])
     user = await get_user(uid)
-    blocked = user.get("is_blocked", 0) == 1
+    blocked = user["is_blocked"] == 1
     if blocked:
         await unblock_user(uid)
         await callback_query.answer("Пользователь разблокирован!")
