@@ -5,8 +5,9 @@ import logging
 from aiogram import Router, F, Bot
 from aiogram.types import (
     Message, CallbackQuery,
-    InlineKeyboardMarkup, KeyboardButton,
-    ReplyKeyboardMarkup, WebAppInfo,
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton,
+    WebAppInfo,
     LabeledPrice, PreCheckoutQuery, SuccessfulPayment,
     BufferedInputFile
 )
