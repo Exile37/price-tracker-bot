@@ -360,6 +360,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
         const urlParams = new URLSearchParams(window.location.search);
         const userId = parseInt(urlParams.get('user_id')) || tg?.initDataUnsafe?.user?.id || 0;
+        console.log('User ID:', userId);
 
         async function loadProducts() {
             try {
@@ -392,10 +393,13 @@ HTML_PAGE = """<!DOCTYPE html>
                 const resp = await fetch('/api/admin/stats');
                 const data = await resp.json();
                 ADMIN_ID = data.admin_id;
+                console.log('Admin ID:', ADMIN_ID, 'Match:', userId === ADMIN_ID);
                 if (userId === ADMIN_ID) {
                     document.getElementById('adminTab').style.display = 'block';
                 }
-            } catch (e) {}
+            } catch (e) {
+                console.error('Admin init error:', e);
+            }
         }
 
         function switchTab(tab) {
@@ -446,10 +450,6 @@ HTML_PAGE = """<!DOCTYPE html>
             const data = await resp.json();
             if (data.ok) alert('Промокод создан: ' + code);
             else alert('Ошибка');
-        }
-
-        if (userId === ADMIN_ID) {
-            document.getElementById('adminTab').style.display = 'block';
         }
 
         initAdmin();
