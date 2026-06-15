@@ -1,7 +1,7 @@
 import logging
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-from src.database.db import get_user_products, get_price_history, deactivate_product, get_analytics, get_user_settings
+from src.database.db import get_user_products, get_price_history, deactivate_product, get_analytics, get_user_settings, get_all_users, get_user_count, get_premium_user_count, get_total_products, set_custom_limit, create_promocode
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,50 @@ async def api_analytics(user_id: int):
         "check_interval": settings[1] if settings else 30,
         "total_saved": settings[2] if settings else 0,
     }
+
+
+@app.get("/api/admin/stats")
+async def api_admin_stats():
+    return {
+        "total_users": await get_user_count(),
+        "premium_users": await get_premium_user_count(),
+        "total_products": await get_total_products(),
+    }
+
+
+@app.get("/api/admin/users")
+async def api_admin_users():
+    users = await get_all_users()
+    result = []
+    for u in users:
+        result.append({
+            "user_id": u["user_id"],
+            "username": u["username"],
+            "is_premium": u["is_premium"],
+            "custom_limit": u["custom_limit"],
+            "created_at": str(u["created_at"]),
+        })
+    return {"users": result}
+
+
+@app.post("/api/admin/setlimit")
+async def api_admin_setlimit(data: dict):
+    user_id = data.get("user_id")
+    limit = data.get("limit")
+    if user_id and limit is not None:
+        await set_custom_limit(int(user_id), int(limit))
+        return {"ok": True}
+    return {"ok": False}
+
+
+@app.post("/api/admin/promo")
+async def api_admin_promo(data: dict):
+    code = data.get("code", "").upper()
+    bonus = data.get("bonus", 0)
+    if code and bonus:
+        success = await create_promocode(code, bonus_products=int(bonus))
+        return {"ok": success}
+    return {"ok": False}
 
 
 HTML_PAGE = """<!DOCTYPE html>
@@ -158,6 +202,59 @@ HTML_PAGE = """<!DOCTYPE html>
             cursor: pointer;
             font-size: 12px;
         }
+        .tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        .tab {
+            flex: 1;
+            padding: 10px;
+            background: #1a1a3e;
+            border: none;
+            border-radius: 8px;
+            color: #888;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .tab.active {
+            background: #2a2a5e;
+            color: #00d4aa;
+        }
+        .admin-section { display: none; }
+        .admin-section.active { display: block; }
+        .admin-card {
+            background: #1a1a3e;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+        .admin-stat {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #2a2a4e;
+        }
+        .admin-input {
+            width: 100%;
+            padding: 10px;
+            background: #0f0f23;
+            border: 1px solid #2a2a4e;
+            border-radius: 8px;
+            color: #e0e0e0;
+            margin: 4px 0;
+        }
+        .admin-btn {
+            width: 100%;
+            padding: 12px;
+            background: #00d4aa;
+            border: none;
+            border-radius: 8px;
+            color: #0f0f23;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 8px;
+        }
         .chart-modal {
             display: none;
             position: fixed;
@@ -199,6 +296,13 @@ HTML_PAGE = """<!DOCTYPE html>
         <h1>🛒 Price Tracker</h1>
     </div>
 
+    <div class="tabs">
+        <button class="tab active" onclick="switchTab('products')">📦 Товары</button>
+        <button class="tab" id="adminTab" onclick="switchTab('admin')" style="display:none">🔧 Админ</button>
+    </div>
+
+    <div id="productsSection" class="admin-section active">
+
     <div class="stats" id="stats">
         <div class="stat-card">
             <div class="stat-value" id="total">-</div>
@@ -216,6 +320,26 @@ HTML_PAGE = """<!DOCTYPE html>
 
     <div class="product-list" id="products">
         <div class="loading">Загрузка...</div>
+    </div>
+    </div>
+
+    <div id="adminSection" class="admin-section">
+        <div class="admin-card">
+            <h3 style="color:#00d4aa;margin-bottom:12px">📊 Статистика</h3>
+            <div class="admin-stat"><span>Пользователей</span><span id="aUsers">-</span></div>
+            <div class="admin-stat"><span>Премиум</span><span id="aPremium">-</span></div>
+            <div class="admin-stat"><span>Товаров</span><span id="aProducts">-</span></div>
+        </div>
+        <div class="admin-card">
+            <h3 style="color:#00d4aa;margin-bottom:12px">🎁 Создать промокод</h3>
+            <input class="admin-input" id="promoCode" placeholder="Код (PROMO-XXXX)">
+            <input class="admin-input" id="promoBonus" type="number" placeholder="Бонус (кол-во товаров)">
+            <button class="admin-btn" onclick="createPromo()">Создать</button>
+        </div>
+        <div class="admin-card">
+            <h3 style="color:#00d4aa;margin-bottom:12px">👥 Пользователи</h3>
+            <div id="userList">Загрузка...</div>
+        </div>
     </div>
 
     <div class="chart-modal" id="chartModal">
@@ -259,7 +383,63 @@ HTML_PAGE = """<!DOCTYPE html>
         async function deleteProduct(productId) {
             if (!confirm('Удалить товар?')) return;
             await fetch(`/api/products/${productId}`, { method: 'DELETE' });
-            loadProducts();
+        const ADMIN_ID = 951494385;
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.admin-section').forEach(s => s.classList.remove('active'));
+            if (tab === 'products') {
+                document.querySelector('.tab:first-child').classList.add('active');
+                document.getElementById('productsSection').classList.add('active');
+            } else {
+                document.getElementById('adminTab').classList.add('active');
+                document.getElementById('adminSection').classList.add('active');
+                loadAdmin();
+            }
+        }
+
+        async function loadAdmin() {
+            try {
+                const [statsResp, usersResp] = await Promise.all([
+                    fetch('/api/admin/stats'),
+                    fetch('/api/admin/users')
+                ]);
+                const stats = await statsResp.json();
+                const users = await usersResp.json();
+
+                document.getElementById('aUsers').textContent = stats.total_users;
+                document.getElementById('aPremium').textContent = stats.premium_users;
+                document.getElementById('aProducts').textContent = stats.total_products;
+
+                const list = document.getElementById('userList');
+                list.innerHTML = users.users.slice(0, 20).map(u => `
+                    <div class="admin-stat">
+                        <span>${u.username ? '@' + u.username : u.user_id}</span>
+                        <span>${u.is_premium ? '⭐' : '👤'} ${u.custom_limit > 0 ? 'лимит:' + u.custom_limit : ''}</span>
+                    </div>
+                `).join('');
+            } catch (e) {}
+        }
+
+        async function createPromo() {
+            const code = document.getElementById('promoCode').value.trim();
+            const bonus = parseInt(document.getElementById('promoBonus').value);
+            if (!code || !bonus) return alert('Заполни все поля');
+            const resp = await fetch('/api/admin/promo', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({code, bonus})
+            });
+            const data = await resp.json();
+            if (data.ok) alert('Промокод создан: ' + code);
+            else alert('Ошибка');
+        }
+
+        if (userId === ADMIN_ID) {
+            document.getElementById('adminTab').style.display = 'block';
+        }
+
+        loadProducts();
         }
 
         function renderProducts(products) {
