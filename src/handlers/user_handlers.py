@@ -607,38 +607,192 @@ async def cmd_admin(message: Message):
     total_users = await get_user_count()
     premium_users = await get_premium_user_count()
     total_products = await get_total_products()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"👥 Пользователи ({total_users})", callback_data="adm_users")],
+        [InlineKeyboardButton(text=f"⭐ Премиум ({premium_users})", callback_data="adm_premium")],
+        [InlineKeyboardButton(text=f"📦 Товаров ({total_products})", callback_data="adm_products")],
+        [InlineKeyboardButton(text="🎁 Создать промокод", callback_data="adm_promo")],
+        [InlineKeyboardButton(text="🔑 Создать ключ", callback_data="adm_key")],
+        [InlineKeyboardButton(text="📨 Рассылка", callback_data="adm_broadcast")],
+    ])
     await message.answer(
         f"🔧 <b>Админ-панель</b>\n\n"
         f"👤 Пользователей: <b>{total_users}</b>\n"
         f"⭐ Премиум: <b>{premium_users}</b>\n"
-        f"📦 Товаров: <b>{total_products}</b>\n\n"
-        f"<b>Команды:</b>\n"
-        f"/admin_users — список пользователей\n"
-        f"/admin_setlimit <code>user_id кол-во</code> — задать лимит\n"
-        f"/admin_addkey — создать премиум-ключ\n"
-        f"/admin_broadcast <code>текст</code> — рассылка всем",
-        parse_mode="HTML"
+        f"📦 Товаров: <b>{total_products}</b>",
+        parse_mode="HTML",
+        reply_markup=kb
     )
 
 
-@router.message(Command("admin_users"))
-async def cmd_admin_users(message: Message):
-    if message.from_user.id != ADMIN_ID:
+@router.callback_query(F.data == "adm_users")
+async def cb_adm_users(callback_query: CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer()
         return
     users = await get_all_users()
-    if not users:
-        await message.answer("Нет пользователей.")
-        return
     lines = []
-    for u in users[:30]:
+    for u in users[:15]:
         status = "⭐" if u["is_premium"] else "👤"
-        custom = f" (лимит: {u['custom_limit']})" if u["custom_limit"] else ""
-        username = f"@{u['username']}" if u["username"] else "нет"
-        lines.append(f"{status} <code>{u['user_id']}</code> {username}{custom}")
+        username = f"@{u['username']}" if u["username"] else str(u["user_id"])
+        lines.append(f"{status} {username}")
     text = f"👥 <b>Пользователи ({len(users)}):</b>\n\n" + "\n".join(lines)
-    if len(users) > 30:
-        text += f"\n\n...и ещё {len(users) - 30}"
-    await message.answer(text, parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="adm_back")]
+    ])
+    await callback_query.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback_query.answer()
+
+
+@router.callback_query(F.data == "adm_premium")
+async def cb_adm_premium(callback_query: CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer()
+        return
+    users = await get_all_users()
+    premium = [u for u in users if u["is_premium"]]
+    lines = []
+    for u in premium[:15]:
+        username = f"@{u['username']}" if u["username"] else str(u["user_id"])
+        lines.append(f"⭐ {username}")
+    text = f"⭐ <b>Премиум ({len(premium)}):</b>\n\n" + ("\n".join(lines) if lines else "Нет")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="adm_back")]
+    ])
+    await callback_query.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback_query.answer()
+
+
+@router.callback_query(F.data == "adm_products")
+async def cb_adm_products(callback_query: CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer()
+        return
+    total = await get_total_products()
+    await callback_query.message.edit_text(
+        f"📦 Всего товаров: <b>{total}</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="adm_back")]
+        ])
+    )
+    await callback_query.answer()
+
+
+@router.callback_query(F.data == "adm_back")
+async def cb_adm_back(callback_query: CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer()
+        return
+    total_users = await get_user_count()
+    premium_users = await get_premium_user_count()
+    total_products = await get_total_products()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"👥 Пользователи ({total_users})", callback_data="adm_users")],
+        [InlineKeyboardButton(text=f"⭐ Премиум ({premium_users})", callback_data="adm_premium")],
+        [InlineKeyboardButton(text=f"📦 Товаров ({total_products})", callback_data="adm_products")],
+        [InlineKeyboardButton(text="🎁 Создать промокод", callback_data="adm_promo")],
+        [InlineKeyboardButton(text="🔑 Создать ключ", callback_data="adm_key")],
+        [InlineKeyboardButton(text="📨 Рассылка", callback_data="adm_broadcast")],
+    ])
+    await callback_query.message.edit_text(
+        f"🔧 <b>Админ-панель</b>\n\n"
+        f"👤 Пользователей: <b>{total_users}</b>\n"
+        f"⭐ Премиум: <b>{premium_users}</b>\n"
+        f"📦 Товаров: <b>{total_products}</b>",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+    await callback_query.answer()
+
+
+@router.callback_query(F.data == "adm_key")
+async def cb_adm_key(callback_query: CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer()
+        return
+    key = f"Premium-{uuid.uuid4().hex[:4].upper()}-{uuid.uuid4().hex[:4].upper()}"
+    from src.database.db import create_premium_key
+    await create_premium_key(key)
+    await callback_query.message.edit_text(
+        f"🔑 <b>Новый ключ:</b>\n<code>{key}</code>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="adm_back")]
+        ])
+    )
+    await callback_query.answer()
+
+
+@router.callback_query(F.data == "adm_promo")
+async def cb_adm_promo(callback_query: CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer()
+        return
+    await callback_query.message.edit_text(
+        "🎁 Отправь промокод в формате:\n<code>PROMO-XXXX 5</code>\n\n(код + бонус товаров)",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="adm_back")]
+        ])
+    )
+    await callback_query.answer()
+
+
+@router.message(Command("admin_promo"))
+async def cmd_admin_promo(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    parts = message.text.split()
+    if len(parts) < 3:
+        await message.answer("Формат: /admin_promo <code>КОД БОНУС</code>", parse_mode="HTML")
+        return
+    code = parts[1].upper()
+    bonus = int(parts[2])
+    success = await create_promocode(code, bonus_products=bonus)
+    if success:
+        await message.answer(f"🎁 Промокод создан:\n<code>{code}</code>\n📦 Бонус: +{bonus} товаров", parse_mode="HTML")
+    else:
+        await message.answer("❌ Промокод уже существует.", parse_mode="HTML")
+
+
+@router.callback_query(F.data == "adm_broadcast")
+async def cb_adm_broadcast(callback_query: CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer()
+        return
+    await callback_query.message.edit_text(
+        "📨 Отправь текст для рассылки:\n<code>/sendall Текст сообщения</code>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="adm_back")]
+        ])
+    )
+    await callback_query.answer()
+
+
+@router.message(Command("sendall"))
+async def cmd_sendall(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    text = message.text.replace("/sendall", "", 1).strip()
+    if not text:
+        await message.answer("Формат: /sendall <code>текст</code>", parse_mode="HTML")
+        return
+    users = await get_all_users()
+    sent = 0
+    failed = 0
+    bot = message.bot
+    for u in users:
+        try:
+            await bot.send_message(u["user_id"], text, parse_mode="HTML")
+            sent += 1
+        except Exception:
+            failed += 1
+    await message.answer(
+        f"📨 Рассылка завершена.\n✅ Отправлено: {sent}\n❌ Ошибки: {failed}",
+        parse_mode="HTML"
+    )
 
 
 @router.message(Command("admin_setlimit"))
@@ -662,30 +816,6 @@ async def cmd_admin_setlimit(message: Message):
     await set_custom_limit(target_id, limit)
     await message.answer(
         f"✅ Лимит для <code>{target_id}</code>: <b>{limit}</b> товаров",
-        parse_mode="HTML"
-    )
-
-
-@router.message(Command("admin_broadcast"))
-async def cmd_admin_broadcast(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    text = message.text.replace("/admin_broadcast", "", 1).strip()
-    if not text:
-        await message.answer("Формат: /admin_broadcast <code>текст</code>", parse_mode="HTML")
-        return
-    users = await get_all_users()
-    sent = 0
-    failed = 0
-    bot = message.bot
-    for u in users:
-        try:
-            await bot.send_message(u["user_id"], text, parse_mode="HTML")
-            sent += 1
-        except Exception:
-            failed += 1
-    await message.answer(
-        f"📨 Рассылка завершена.\n✅ Отправлено: {sent}\n❌ Ошибки: {failed}",
         parse_mode="HTML"
     )
 
