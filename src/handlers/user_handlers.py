@@ -633,7 +633,7 @@ async def cb_adm_users(callback_query: CallbackQuery):
         return
     users = await get_all_users()
     buttons = []
-    for u in users[:10]:
+    for u in users[:8]:
         username = f"@{u['username']}" if u["username"] else str(u["user_id"])
         status = "⭐" if u["is_premium"] else ("🚫" if u.get("is_blocked") else "👤")
         buttons.append([InlineKeyboardButton(
@@ -642,7 +642,10 @@ async def cb_adm_users(callback_query: CallbackQuery):
         )])
     buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="adm_back")])
     text = f"👥 <b>Пользователи ({len(users)}):</b>\n\nВыбери пользователя:"
-    await callback_query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    try:
+        await callback_query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    except Exception:
+        await callback_query.message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     await callback_query.answer()
 
 
