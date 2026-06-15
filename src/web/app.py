@@ -57,7 +57,9 @@ async def api_analytics(user_id: int):
 
 @app.get("/api/admin/stats")
 async def api_admin_stats():
+    from config.settings import ADMIN_ID
     return {
+        "admin_id": ADMIN_ID,
         "total_users": await get_user_count(),
         "premium_users": await get_premium_user_count(),
         "total_products": await get_total_products(),
@@ -383,7 +385,18 @@ HTML_PAGE = """<!DOCTYPE html>
         async function deleteProduct(productId) {
             if (!confirm('Удалить товар?')) return;
             await fetch(`/api/products/${productId}`, { method: 'DELETE' });
-        const ADMIN_ID = 951494385;
+        let ADMIN_ID = 0;
+
+        async function initAdmin() {
+            try {
+                const resp = await fetch('/api/admin/stats');
+                const data = await resp.json();
+                ADMIN_ID = data.admin_id;
+                if (userId === ADMIN_ID) {
+                    document.getElementById('adminTab').style.display = 'block';
+                }
+            } catch (e) {}
+        }
 
         function switchTab(tab) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -439,6 +452,7 @@ HTML_PAGE = """<!DOCTYPE html>
             document.getElementById('adminTab').style.display = 'block';
         }
 
+        initAdmin();
         loadProducts();
         }
 
