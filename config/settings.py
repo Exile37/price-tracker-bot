@@ -14,3 +14,5 @@ PROXY_URL = os.getenv("PROXY_URL", "")
 OZON_COOKIES = os.getenv("OZON_COOKIES", "")
 SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY", "")
 WEBAPP_URL = os.getenv("WEBAPP_URL", "")
+if WEBAPP_URL and not WEBAPP_URL.startswith("https://"):
+    WEBAPP_URL = f"https://{WEBAPP_URL}"
