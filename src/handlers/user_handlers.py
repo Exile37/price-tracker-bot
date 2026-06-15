@@ -19,7 +19,7 @@ from src.database.db import (
     get_user_products, deactivate_product, get_price_history,
     add_referral, get_referral_count, set_premium, use_premium_key,
     set_custom_limit, get_all_users, get_user_count, get_premium_user_count,
-    get_total_products
+    get_total_products, save_pending, get_pending
 )
 from src.chart import generate_price_chart
 from config.settings import FREE_LIMIT, PREMIUM_LIMIT, ADMIN_ID, STARS_PRICE, WEBAPP_URL
@@ -29,21 +29,19 @@ logger = logging.getLogger(__name__)
 
 URL_PATTERN = re.compile(r'https?://[^\s<>"]+')
 
-pending_urls: dict[str, dict] = {}
-
 
 def _is_url(text: str) -> bool:
     return bool(URL_PATTERN.search(text))
 
 
-def _save_pending(url: str, data: dict) -> str:
+async def _save_pending(url: str, data: dict, user_id: int) -> str:
     short_id = uuid.uuid4().hex[:8]
-    pending_urls[short_id] = {"url": url, **data}
+    await save_pending(short_id, user_id, {**data, "url": url})
     return short_id
 
 
-def _get_pending(short_id: str) -> dict | None:
-    return pending_urls.pop(short_id, None)
+async def _get_pending(short_id: str) -> dict | None:
+    return await get_pending(short_id)
 
 
 def _main_menu_kb() -> InlineKeyboardMarkup:
@@ -594,12 +592,12 @@ async def handle_message(message: Message):
             )
         return
 
-    short_id = _save_pending(text, {
+    short_id = await _save_pending(text, {
         "title": result["title"],
         "price": result["price"],
         "currency": result["currency"],
         "image": result.get("image"),
-    })
+    }, user_id)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Следить", callback_data=f"track:{short_id}")],
@@ -652,7 +650,7 @@ async def _check_limit(user_id: int, is_premium: bool, user=None) -> bool:
 @router.callback_query(F.data.startswith("track:"))
 async def cb_track(callback_query: CallbackQuery):
     short_id = callback_query.data.split(":", 1)[1]
-    pending = _get_pending(short_id)
+    pending = await _get_pending(short_id)
 
     if not pending:
         try:
@@ -696,14 +694,14 @@ async def cb_track(callback_query: CallbackQuery):
 @router.callback_query(F.data.startswith("target:"))
 async def cb_target_price(callback_query: CallbackQuery):
     short_id = callback_query.data.split(":", 1)[1]
-    pending = _get_pending(short_id)
+    pending = await _get_pending(short_id)
 
     if not pending:
         await callback_query.message.edit_text("⏰ Время действия истекло.", reply_markup=_main_menu_kb())
         await callback_query.answer()
         return
 
-    _save_pending(short_id, {**pending, "_awaiting_target": True})
+    await save_pending(short_id, callback_query.from_user.id, {**pending, "_awaiting_target": True})
 
     await callback_query.message.edit_text(
         f"🎯 Введи целевую цену для:\n"
@@ -718,7 +716,7 @@ async def cb_target_price(callback_query: CallbackQuery):
 @router.callback_query(F.data.startswith("track_now:"))
 async def cb_track_now(callback_query: CallbackQuery):
     short_id = callback_query.data.split(":", 1)[1]
-    pending = _get_pending(short_id)
+    pending = await _get_pending(short_id)
 
     if not pending:
         await callback_query.message.edit_text("⏰ Время действия истекло.", reply_markup=_main_menu_kb())
@@ -757,72 +755,47 @@ async def cb_track_now(callback_query: CallbackQuery):
 @router.message(F.text.regexp(r"^\d+([.,]\d+)?$"))
 async def handle_target_price(message: Message):
     user_id = message.from_user.id
-
-    for sid, data in list(pending_urls.items()):
-        if data.get("_awaiting_target") and sid.startswith(str(user_id)[-4:]):
-            pass
-
     target = message.text.replace(",", ".").strip()
     try:
         target_val = float(target)
     except ValueError:
         return
 
-    for sid, data in list(pending_urls.items()):
-        if data.get("_awaiting_target"):
-            data["target_price"] = target_val
-            data.pop("_awaiting_target", None)
+    import json
+    db = await __import__('src.database.db', fromlist=['_get_db'])._get_db()
+    async with db.execute(
+        "SELECT short_id, data FROM pending_urls WHERE user_id = ? AND data LIKE '%_awaiting_target%'",
+        (user_id,)
+    ) as cursor:
+        row = await cursor.fetchone()
 
-            product_id = await add_product(
-                user_id=user_id,
-                url=data["url"],
-                title=data["title"],
-                image_url=data.get("image") or "",
-                price=data["price"],
-                currency=data["currency"],
-                target_price=target_val,
-            )
+    if row:
+        short_id, data_str = row
+        data = json.loads(data_str)
+        await db.execute("DELETE FROM pending_urls WHERE short_id = ?", (short_id,))
+        await db.commit()
 
-            success_text = (
-                f"✅ <b>Товар добавлен!</b>\n\n"
-                f"📦 {data['title'][:80]}\n"
-                f"💰 {data['price']}{data['currency']}\n"
-                f"🎯 Цель: {target_val}{data['currency']}\n"
-                f"🆔 #{product_id}\n\n"
-                "Буду проверять цену каждые 30 мин.\n"
-                "Как только цена достигнет цели — сообщу!"
-            )
+        product_id = await add_product(
+            user_id=user_id,
+            url=data["url"],
+            title=data["title"],
+            image_url=data.get("image") or "",
+            price=data["price"],
+            currency=data["currency"],
+            target_price=target_val,
+        )
 
-            await message.answer(success_text, parse_mode="HTML", reply_markup=_reply_kb())
-            return
+        success_text = (
+            f"✅ <b>Товар добавлен!</b>\n\n"
+            f"📦 {data['title'][:80]}\n"
+            f"💰 {data['price']}{data['currency']}\n"
+            f"🎯 Цель: {target_val}{data['currency']}\n"
+            f"🆔 #{product_id}\n\n"
+            "Буду проверять цену каждые 30 мин.\n"
+            "Как только цена достигнет цели — сообщу!"
+        )
 
-    for sid, data in list(pending_urls.items()):
-        if data.get("user_id") == user_id and data.get("_awaiting_target"):
-            data["target_price"] = target_val
-            data.pop("_awaiting_target", None)
-
-            product_id = await add_product(
-                user_id=user_id,
-                url=data["url"],
-                title=data["title"],
-                image_url=data.get("image") or "",
-                price=data["price"],
-                currency=data["currency"],
-                target_price=target_val,
-            )
-
-            success_text = (
-                f"✅ <b>Товар добавлен!</b>\n\n"
-                f"📦 {data['title'][:80]}\n"
-                f"💰 {data['price']}{data['currency']}\n"
-                f"🎯 Цель: {target_val}{data['currency']}\n"
-                f"🆔 #{product_id}\n\n"
-                "Буду проверять цену каждые 30 мин.\n"
-                "Как только цена достигнет цели — сообщу!"
-            )
-
-            await message.answer(success_text, parse_mode="HTML", reply_markup=_reply_kb())
-            return
+        await message.answer(success_text, parse_mode="HTML", reply_markup=_reply_kb())
 
 
 @router.callback_query(F.data == "cancel_track")

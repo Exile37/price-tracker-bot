@@ -72,10 +72,15 @@ async def init_db():
             FOREIGN KEY (used_by) REFERENCES users(user_id)
         )
     """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS pending_urls (
+            short_id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            data TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     await db.commit()
-
-
-async def add_user(user_id: int, username: str = "") -> bool:
     db = await _get_db()
     cursor = await db.execute(
         "INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)",
@@ -263,3 +268,25 @@ async def get_total_products() -> int:
     async with db.execute("SELECT COUNT(*) FROM products WHERE is_active = 1") as cursor:
         row = await cursor.fetchone()
         return row[0]
+
+
+async def save_pending(short_id: str, user_id: int, data: dict):
+    import json
+    db = await _get_db()
+    await db.execute(
+        "INSERT OR REPLACE INTO pending_urls (short_id, user_id, data) VALUES (?, ?, ?)",
+        (short_id, user_id, json.dumps(data))
+    )
+    await db.commit()
+
+
+async def get_pending(short_id: str) -> dict | None:
+    import json
+    db = await _get_db()
+    async with db.execute("SELECT data FROM pending_urls WHERE short_id = ?", (short_id,)) as cursor:
+        row = await cursor.fetchone()
+        if row:
+            await db.execute("DELETE FROM pending_urls WHERE short_id = ?", (short_id,))
+            await db.commit()
+            return json.loads(row[0])
+    return None
