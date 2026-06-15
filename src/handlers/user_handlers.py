@@ -58,9 +58,26 @@ def _reply_kb() -> ReplyKeyboardMarkup:
         [KeyboardButton(text="📋 Мои товары"), KeyboardButton(text="📊 График")],
         [KeyboardButton(text="⭐ Премиум"), KeyboardButton(text="🔗 Реферал")],
     ]
-    if WEBAPP_URL:
-        buttons.insert(0, [KeyboardButton(text="📱 Мой кабинет", web_app=WebAppInfo(url=WEBAPP_URL))])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+@router.message(F.text == "📱 Мой кабинет")
+async def btn_cabinet(message: Message):
+    if WEBAPP_URL:
+        url = f"{WEBAPP_URL}?user_id={message.from_user.id}"
+        await message.answer(
+            "📱 Открываю мини-приложение...",
+            reply_markup=ReplyKeyboardMarkup(
+                keyboard=[
+                    [KeyboardButton(text="📱 Мой кабинет", web_app=WebAppInfo(url=url))],
+                    [KeyboardButton(text="📋 Мои товары"), KeyboardButton(text="📊 График")],
+                    [KeyboardButton(text="⭐ Премиум"), KeyboardButton(text="🔗 Реферал")],
+                ],
+                resize_keyboard=True,
+            )
+        )
+    else:
+        await message.answer("Мини-приложение ещё не настроено.")
 
 
 def _back_kb() -> InlineKeyboardMarkup:

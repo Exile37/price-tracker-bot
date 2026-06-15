@@ -201,7 +201,8 @@ HTML_PAGE = """<!DOCTYPE html>
             tg.setBackgroundColor('#0f0f23');
         }
 
-        const userId = tg?.initDataUnsafe?.user?.id || 0;
+        const urlParams = new URLSearchParams(window.location.search);
+        const userId = parseInt(urlParams.get('user_id')) || tg?.initDataUnsafe?.user?.id || 0;
 
         async function loadProducts() {
             try {
