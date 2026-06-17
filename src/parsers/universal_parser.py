@@ -3,10 +3,13 @@ import json
 import httpx
 import logging
 import os
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
 WB_COOKIES = os.getenv("WB_COOKIES", "") or os.getenv("x_wbaas_token", "")
+SCRAPER_KEY = os.getenv("SCRAPER_API_KEY", "")
+
 WB_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
     "Accept": "application/json",
@@ -74,6 +77,20 @@ def _wb_basket_host(vol: int) -> str:
         return "basket-23.wbbasket.ru"
 
 
+async def _scraper_get(url: str) -> httpx.Response | None:
+    if not SCRAPER_KEY:
+        return None
+    scraper_url = f"http://api.scraperapi.com?api_key={SCRAPER_KEY}&url={quote(url)}"
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            resp = await client.get(scraper_url)
+            if resp.status_code == 200:
+                return resp
+    except Exception as e:
+        logger.error(f"ScraperAPI error: {e}")
+    return None
+
+
 async def _fetch_api_v2(nm_id: str) -> tuple[str | None, str | None, float | None]:
     from config.settings import PROXY_URL
     api_url = f"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={nm_id}"
@@ -106,35 +123,29 @@ async def _fetch_api_v2(nm_id: str) -> tuple[str | None, str | None, float | Non
     return None, None, None
 
 
-async def _fetch_search_api(nm_id: str) -> tuple[str | None, str | None, float | None]:
-    from config.settings import PROXY_URL
-    api_url = f"https://search.wb.ru/exactmatch/ru/common/v7/search?appType=1&curr=rub&dest=-1257786&spp=30&query={nm_id}"
-    proxies = PROXY_URL if PROXY_URL else None
+async def _fetch_api_v2_scraper(nm_id: str) -> tuple[str | None, str | None, float | None]:
+    api_url = f"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={nm_id}"
+    resp = await _scraper_get(api_url)
+    if resp:
+        try:
+            data = resp.json()
+            products = data.get("data", {}).get("products", [])
+            if products:
+                product = products[0]
+                title = f"{product.get('brand', '')} {product.get('name', '')}".strip()
+                vol = product.get("vol", int(nm_id) // 100000)
+                part = product.get("part", int(nm_id) // 1000)
+                host = _wb_basket_host(vol)
+                image_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/images/big/1.jpg"
 
-    try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True, proxy=proxies) as client:
-            resp = await client.get(api_url, headers=WB_HEADERS)
-            if resp.status_code == 200:
-                data = resp.json()
-                products = data.get("data", {}).get("products", [])
-                if products:
-                    product = products[0]
-                    title = f"{product.get('brand', '')} {product.get('name', '')}".strip()
-                    vol = product.get("vol", int(nm_id) // 100000)
-                    part = product.get("part", int(nm_id) // 1000)
-                    host = _wb_basket_host(vol)
-                    image_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/images/big/1.jpg"
-
-                    sizes = product.get("sizes", [])
-                    if sizes:
-                        total = sizes[0].get("price", {}).get("total", 0)
-                        if total > 0:
-                            return title, image_url, total / 100
-                    return title, image_url, None
-            else:
-                logger.warning(f"Search API status {resp.status_code}")
-    except Exception as e:
-        logger.error(f"Search API error: {e}")
+                sizes = product.get("sizes", [])
+                if sizes:
+                    total = sizes[0].get("price", {}).get("total", 0)
+                    if total > 0:
+                        return title, image_url, total / 100
+                return title, image_url, None
+        except Exception as e:
+            logger.error(f"Scraper API parse error: {e}")
     return None, None, None
 
 
@@ -199,11 +210,11 @@ async def parse_product(url: str) -> dict | None:
         if not image_url and api_image:
             image_url = api_image
 
-    if not price:
-        s_title, s_image, s_price = await _fetch_search_api(nm_id)
+    if not price and SCRAPER_KEY:
+        s_title, s_image, s_price = await _fetch_api_v2_scraper(nm_id)
         if s_price:
             price = s_price
-            logger.info(f"Search API price: {price}")
+            logger.info(f"Scraper API price: {price}")
         if not title and s_title:
             title = s_title
         if not image_url and s_image:
