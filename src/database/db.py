@@ -334,10 +334,11 @@ async def set_user_setting(user_id: int, key: str, value):
 
 async def get_user_settings(user_id: int):
     db = await _get_db()
-    return await db.fetchrow(
+    async with db.execute(
         "SELECT min_drop_pct, check_interval, total_savings, promo_used FROM users WHERE user_id = ?",
         (user_id,)
-    )
+    ) as cursor:
+        return await cursor.fetchone()
 
 
 async def add_savings(user_id: int, amount: float):
@@ -364,10 +365,11 @@ async def create_promocode(code: str, discount_days: int = 0, bonus_products: in
 
 async def use_promocode(code: str, user_id: int) -> dict | None:
     db = await _get_db()
-    row = await db.fetchrow(
+    async with db.execute(
         "SELECT id, discount_days, bonus_products, used_by FROM promocodes WHERE code = ?",
         (code,)
-    )
+    ) as cursor:
+        row = await cursor.fetchone()
     if not row or row[3]:
         return None
     await db.execute("UPDATE promocodes SET used_by = ? WHERE id = ?", (user_id, row[0]))
@@ -377,13 +379,14 @@ async def use_promocode(code: str, user_id: int) -> dict | None:
 
 async def get_analytics(user_id: int) -> dict:
     db = await _get_db()
-    products = await db.fetch(
+    async with db.execute(
         "SELECT p.*, ph.price as first_price FROM products p "
         "LEFT JOIN price_history ph ON ph.product_id = p.id AND ph.id = "
         "(SELECT MIN(id) FROM price_history WHERE product_id = p.id) "
         "WHERE p.user_id = ? AND p.is_active = 1",
         (user_id,)
-    )
+    ) as cursor:
+        products = await cursor.fetchall()
     total = len(products)
     drops = 0
     rises = 0
@@ -418,5 +421,6 @@ async def unblock_user(user_id: int):
 
 async def is_blocked(user_id: int) -> bool:
     db = await _get_db()
-    row = await db.fetchrow("SELECT is_blocked FROM users WHERE user_id = ?", (user_id,))
-    return row and row[0] == 1
+    async with db.execute("SELECT is_blocked FROM users WHERE user_id = ?", (user_id,)) as cursor:
+        row = await cursor.fetchone()
+        return row and row[0] == 1
