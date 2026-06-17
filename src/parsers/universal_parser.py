@@ -216,6 +216,7 @@ async def _fetch_search_scraper(nm_id: str) -> tuple[str | None, str | None, flo
 async def _fetch_page_scraper(url: str) -> tuple[str | None, str | None, float | None]:
     resp = await _scraper_get(url)
     if resp:
+        logger.info(f"Page scraper status: {resp.status_code}, len: {len(resp.text)}")
         try:
             html = resp.text
 
@@ -231,14 +232,15 @@ async def _fetch_page_scraper(url: str) -> tuple[str | None, str | None, float |
                 r'"price":\s*"?(\d+)',
                 r'"salePriceU":\s*(\d+)',
                 r'"sale":\s*"?(\d+)',
+                r'"basic":\s*(\d+)',
+                r'"total":\s*(\d+)',
             ]:
                 m = re.search(pattern, html)
                 if m:
                     val = int(m.group(1))
                     if val > 100:
                         price = val / 100
-                    elif val > 0:
-                        price = float(val)
+                        logger.info(f"Page price from {pattern}: {price}")
                     break
 
             if not price:
@@ -247,6 +249,7 @@ async def _fetch_page_scraper(url: str) -> tuple[str | None, str | None, float |
                     price_str = price_match.group(1).replace(' ', '')
                     try:
                         price = float(price_str)
+                        logger.info(f"Page price from ₽: {price}")
                     except ValueError:
                         pass
 
@@ -255,9 +258,14 @@ async def _fetch_page_scraper(url: str) -> tuple[str | None, str | None, float |
             if og_match:
                 image_url = og_match.group(1)
 
+            if title:
+                logger.info(f"Page title: {title[:50]}")
+
             return title, image_url, price
         except Exception as e:
             logger.error(f"Page scraper parse error: {e}")
+    else:
+        logger.warning("Page scraper: no response")
     return None, None, None
 
 
