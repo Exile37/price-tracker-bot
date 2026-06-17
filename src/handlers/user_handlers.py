@@ -953,6 +953,9 @@ async def handle_message(message: Message):
     user_id = message.from_user.id
     text = message.text.strip()
 
+    if text.startswith("/"):
+        return
+
     if await is_blocked(user_id):
         return
 
