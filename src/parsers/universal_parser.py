@@ -153,6 +153,59 @@ async def _fetch_api_v2(nm_id: str) -> tuple[str | None, str | None, float | Non
     return None, None, None
 
 
+async def _fetch_search_direct(nm_id: str) -> tuple[str | None, str | None, float | None]:
+    cookies = await _get_wb_cookies()
+    search_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Accept-Language": "ru-RU,ru;q=0.9",
+        "Origin": "https://www.wildberries.ru",
+        "Referer": f"https://www.wildberries.ru/catalog/0/search.aspx?search={nm_id}",
+    }
+    if cookies:
+        search_headers["Cookie"] = cookies
+
+    search_url = f"https://search.wb.ru/exactmatch/ru/common/v7/search?appType=1&curr=rub&dest=-1257786&spp=30&query={nm_id}&resultset=catalog&sort=popular&page=1"
+
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(search_url, headers=search_headers)
+            logger.info(f"Direct search status: {resp.status_code}")
+            if resp.status_code == 200:
+                data = resp.json()
+                products = data.get("data", {}).get("products", [])
+                if not products:
+                    products = data.get("products", [])
+                if not products:
+                    sr = data.get("search_result", {})
+                    products = sr.get("products", []) if isinstance(sr, dict) else []
+                logger.info(f"Direct search found {len(products)} products")
+
+                if products:
+                    product = products[0]
+                    title = f"{product.get('brand', product.get('supplier', ''))} {product.get('name', product.get('title', ''))}".strip()
+                    vol = product.get("vol", int(nm_id) // 100000)
+                    part = product.get("part", int(nm_id) // 1000)
+                    host = _wb_basket_host(vol)
+                    image_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/images/big/1.jpg"
+
+                    sizes = product.get("sizes", [])
+                    if sizes:
+                        price_info = sizes[0].get("price", {})
+                        total = price_info.get("total", price_info.get("basic", 0))
+                        if total and total > 0:
+                            return title, image_url, total / 100
+
+                    sale = product.get("salePriceU", product.get("sale", 0))
+                    if sale and sale > 100:
+                        return title, image_url, sale / 100
+
+                    return title, image_url, None
+    except Exception as e:
+        logger.error(f"Direct search error: {e}")
+    return None, None, None
+
+
 async def _fetch_search_scraper(nm_id: str) -> tuple[str | None, str | None, float | None]:
     search_url = f"https://search.wb.ru/exactmatch/ru/common/v7/search?appType=1&curr=rub&dest=-1257786&spp=30&query={nm_id}&resultset=catalog&sort=popular&page=1"
     resp = await _scraper_get(search_url)
@@ -460,6 +513,16 @@ async def parse_product(url: str) -> dict | None:
             title = api_title
         if not image_url and api_image:
             image_url = api_image
+
+    if not price:
+        ds_title, ds_image, ds_price = await _fetch_search_direct(nm_id)
+        if ds_price:
+            price = ds_price
+            logger.info(f"Direct search price: {price}")
+        if not title and ds_title:
+            title = ds_title
+        if not image_url and ds_image:
+            image_url = ds_image
 
     if not price and SCRAPER_KEY:
         s_title, s_image, s_price = await _fetch_search_scraper(nm_id)
