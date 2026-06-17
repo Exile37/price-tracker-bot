@@ -106,12 +106,13 @@ def _wb_basket_host(vol: int) -> str:
         return "basket-23.wbbasket.ru"
 
 
-async def _scraper_get(url: str) -> httpx.Response | None:
+async def _scraper_get(url: str, render: bool = False) -> httpx.Response | None:
     if not SCRAPER_KEY:
         return None
-    scraper_url = f"http://api.scraperapi.com?api_key={SCRAPER_KEY}&url={quote(url)}"
+    render_param = "&render=true" if render else ""
+    scraper_url = f"http://api.scraperapi.com?api_key={SCRAPER_KEY}&url={quote(url)}{render_param}"
     try:
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=60 if render else 30, follow_redirects=True) as client:
             resp = await client.get(scraper_url)
             if resp.status_code == 200:
                 return resp
@@ -214,7 +215,7 @@ async def _fetch_search_scraper(nm_id: str) -> tuple[str | None, str | None, flo
 
 
 async def _fetch_page_scraper(url: str) -> tuple[str | None, str | None, float | None]:
-    resp = await _scraper_get(url)
+    resp = await _scraper_get(url, render=True)
     if resp:
         logger.info(f"Page scraper status: {resp.status_code}, len: {len(resp.text)}")
         try:
