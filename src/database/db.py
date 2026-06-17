@@ -111,6 +111,17 @@ async def init_db():
         await db.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER DEFAULT 0")
     except Exception:
         pass
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS wb_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            admin_id INTEGER NOT NULL,
+            phone TEXT DEFAULT '',
+            refresh_token TEXT DEFAULT '',
+            access_token TEXT DEFAULT '',
+            cookies TEXT DEFAULT '',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     await db.commit()
 
 
@@ -424,3 +435,26 @@ async def is_blocked(user_id: int) -> bool:
     async with db.execute("SELECT is_blocked FROM users WHERE user_id = ?", (user_id,)) as cursor:
         row = await cursor.fetchone()
         return row and row[0] == 1
+
+
+async def save_wb_tokens(admin_id: int, phone: str, refresh_token: str, access_token: str, cookies: str):
+    db = await _get_db()
+    await db.execute(
+        """INSERT INTO wb_tokens (admin_id, phone, refresh_token, access_token, cookies, updated_at)
+           VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(admin_id) DO UPDATE SET
+           phone=excluded.phone, refresh_token=excluded.refresh_token,
+           access_token=excluded.access_token, cookies=excluded.cookies,
+           updated_at=CURRENT_TIMESTAMP""",
+        (admin_id, phone, refresh_token, access_token, cookies)
+    )
+    await db.commit()
+
+
+async def get_wb_tokens(admin_id: int):
+    db = await _get_db()
+    async with db.execute(
+        "SELECT phone, refresh_token, access_token, cookies FROM wb_tokens WHERE admin_id = ?",
+        (admin_id,)
+    ) as cursor:
+        return await cursor.fetchone()

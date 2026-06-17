@@ -7,16 +7,34 @@ from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
-WB_COOKIES_RAW = os.getenv("WB_COOKIES", "") or os.getenv("x_wbaas_token", "")
 SCRAPER_KEY = os.getenv("SCRAPER_API_KEY", "")
+WB_COOKIES = ""
 
-if WB_COOKIES_RAW:
-    if "x_wbaas_token=" not in WB_COOKIES_RAW:
-        WB_COOKIES = f"x_wbaas_token={WB_COOKIES_RAW}"
-    else:
-        WB_COOKIES = WB_COOKIES_RAW
-else:
-    WB_COOKIES = ""
+
+async def _get_wb_cookies() -> str:
+    global WB_COOKIES
+    if WB_COOKIES:
+        return WB_COOKIES
+
+    try:
+        from src.database.db import get_wb_tokens
+        from config.settings import ADMIN_ID
+        tokens = await get_wb_tokens(ADMIN_ID)
+        if tokens and tokens[3]:
+            WB_COOKIES = tokens[3]
+            return WB_COOKIES
+    except Exception as e:
+        logger.error(f"Failed to load WB tokens: {e}")
+
+    env_cookies = os.getenv("WB_COOKIES", "") or os.getenv("x_wbaas_token", "")
+    if env_cookies:
+        if "x_wbaas_token=" not in env_cookies:
+            WB_COOKIES = f"x_wbaas_token={env_cookies}"
+        else:
+            WB_COOKIES = env_cookies
+
+    return WB_COOKIES
+
 
 WB_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
@@ -25,8 +43,11 @@ WB_HEADERS = {
     "Origin": "https://www.wildberries.ru",
     "Referer": "https://www.wildberries.ru/",
 }
-if WB_COOKIES:
-    WB_HEADERS["Cookie"] = WB_COOKIES
+
+
+def _update_headers(cookies: str):
+    if cookies:
+        WB_HEADERS["Cookie"] = cookies
 
 
 def _wb_calc_vol_part(nm_id: str) -> tuple[int, int]:
@@ -203,6 +224,10 @@ async def parse_product(url: str) -> dict | None:
 
     nm_id = match.group(1)
     logger.info(f"WB parsing nm_id={nm_id}")
+
+    cookies = await _get_wb_cookies()
+    if cookies:
+        _update_headers(cookies)
 
     title, image_url, price = await _fetch_cdn(nm_id)
     if price:

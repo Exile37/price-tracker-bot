@@ -22,7 +22,7 @@ from src.database.db import (
     get_total_products, save_pending, get_pending,
     set_user_setting, get_user_settings, add_savings,
     create_promocode, use_promocode, get_analytics,
-    block_user, unblock_user, is_blocked
+    block_user, unblock_user, is_blocked, save_wb_tokens, get_wb_tokens
 )
 from src.chart import generate_price_chart
 from config.settings import FREE_LIMIT, PREMIUM_LIMIT, ADMIN_ID, STARS_PRICE, WEBAPP_URL
@@ -1225,3 +1225,92 @@ async def cb_cancel_track(callback_query: CallbackQuery):
         reply_markup=_reply_kb()
     )
     await callback_query.answer()
+
+
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+
+
+class WBLoginState(StatesGroup):
+    waiting_phone = State()
+    waiting_code = State()
+
+
+@router.message(Command("wb_login"))
+async def cmd_wb_login(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.set_state(WBLoginState.waiting_phone)
+    await message.answer(
+        "📱 Отправь номер телефона от аккаунта Wildberries\n"
+        "(в формате: <code>+79001234567</code>):",
+        parse_mode="HTML"
+    )
+
+
+@router.message(WBLoginState.waiting_phone)
+async def wb_login_phone(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    phone = message.text.strip()
+    if not re.match(r'^[\d\+\-\s]{10,15}$', phone):
+        await message.answer("❌ Неверный формат. Отправь номер в формате +79001234567")
+        return
+
+    await state.update_data(phone=phone)
+    await message.answer("⏳ Отправляю код...")
+
+    from src.parsers.wb_auth import wb_send_code
+    result = await wb_send_code(phone)
+
+    if result.get("ok"):
+        session_id = result.get("data", {}).get("sessionId", "")
+        await state.update_data(session_id=session_id)
+        await state.set_state(WBLoginState.waiting_code)
+        await message.answer("✅ Код отправлен! Введи код из SMS:")
+    else:
+        await state.clear()
+        await message.answer(f"❌ Ошибка: {result.get('error', 'Неизвестная ошибка')}\nПопробуй /wb_login заново")
+
+
+@router.message(WBLoginState.waiting_code)
+async def wb_login_code(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    code = message.text.strip()
+    if not code.isdigit() or len(code) < 4:
+        await message.answer("❌ Код должен быть числом (4-6 цифр)")
+        return
+
+    data = await state.get_data()
+    phone = data.get("phone", "")
+    session_id = data.get("session_id", "")
+
+    await message.answer("⏳ Проверяю код...")
+
+    from src.parsers.wb_auth import wb_confirm_code, build_cookie_string
+    result = await wb_confirm_code(phone, code, session_id)
+
+    if result.get("ok"):
+        refresh = result.get("refresh_token", "")
+        access = result.get("access_token", "")
+        cookies = build_cookie_string(refresh, access)
+
+        await save_wb_tokens(ADMIN_ID, phone, refresh, access, cookies)
+        await state.clear()
+
+        await message.answer(
+            "✅ <b>Wildberries авторизован!</b>\n\n"
+            "Теперь бот будет парсить товары через твой аккаунт.",
+            parse_mode="HTML",
+            reply_markup=_reply_kb()
+        )
+    else:
+        await state.clear()
+        error_data = result.get("data", {})
+        await message.answer(
+            f"❌ Ошибка: {error_data.get('error', 'Неверный код')}\n"
+            "Попробуй /wb_login заново"
+        )
