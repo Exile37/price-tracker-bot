@@ -998,13 +998,10 @@ async def wb_cookies_input(message: Message, state: FSMContext):
     )
 
 
-@router.message(F.text)
+@router.message(F.text & ~F.text.startswith("/"))
 async def handle_message(message: Message):
     user_id = message.from_user.id
     text = message.text.strip()
-
-    if text.startswith("/"):
-        return
 
     if await is_blocked(user_id):
         return
