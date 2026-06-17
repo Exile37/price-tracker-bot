@@ -66,31 +66,28 @@ def _wb_basket_host(vol: int) -> str:
         return "basket-23.wbbasket.ru"
 
 
-async def _fetch_card_info(nm_id: str) -> tuple[str | None, str | None]:
-    vol, part = _wb_calc_vol_part(nm_id)
-    host = _wb_basket_host(vol)
-    cdn_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/info/ru/card.json"
+ALL_BASKET_HOSTS = [f"basket-{i:02d}.wbbasket.ru" for i in range(1, 24)]
 
+
+async def _try_cdn_host(host: str, vol: int, part: int, nm_id: str) -> tuple[str | None, str | None, float | None]:
+    title = None
+    image_url = None
+    price = None
+
+    card_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/info/ru/card.json"
     try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-            resp = await client.get(cdn_url, headers=WB_HEADERS)
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+            resp = await client.get(card_url, headers=WB_HEADERS)
             if resp.status_code == 200:
                 data = resp.json()
                 title = data.get("imt_name", "")
                 image_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/images/big/1.jpg"
-                return title, image_url
-    except Exception as e:
-        logger.error(f"CDN card error: {e}")
-    return None, None
+    except Exception:
+        pass
 
-
-async def _fetch_price(nm_id: str) -> float | None:
-    vol, part = _wb_calc_vol_part(nm_id)
-    host = _wb_basket_host(vol)
     history_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/info/price-history.json"
-
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
             resp = await client.get(history_url, headers=WB_HEADERS)
             if resp.status_code == 200:
                 data = resp.json()
@@ -101,41 +98,58 @@ async def _fetch_price(nm_id: str) -> float | None:
                     if isinstance(price_obj, dict):
                         rub = price_obj.get("RUB", 0)
                         if rub and rub > 0:
-                            return rub / 100
-    except Exception as e:
-        logger.error(f"CDN price error: {e}")
-    return None
+                            price = rub / 100
+    except Exception:
+        pass
+
+    return title, image_url, price
 
 
-async def _fetch_api(nm_id: str) -> tuple[str | None, str | None, float | None]:
-    from config.settings import PROXY_URL
-    api_url = f"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={nm_id}"
-    proxies = PROXY_URL if PROXY_URL else None
+async def _fetch_cdn(nm_id: str) -> tuple[str | None, str | None, float | None]:
+    vol, part = _wb_calc_vol_part(nm_id)
+    host = _wb_basket_host(vol)
 
+    title, image_url, price = await _try_cdn_host(host, vol, part, nm_id)
+    if price:
+        return title, image_url, price
+
+    for h in ALL_BASKET_HOSTS:
+        if h == host:
+            continue
+        t, i, p = await _try_cdn_host(h, vol, part, nm_id)
+        if p:
+            return t or title, i or image_url, p
+
+    return title, image_url, price
+
+
+async def _fetch_page_price(url: str) -> tuple[str | None, float | None]:
     try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True, proxy=proxies) as client:
-            resp = await client.get(api_url, headers=WB_HEADERS)
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(url, headers=WB_HEADERS)
             if resp.status_code == 200:
-                data = resp.json()
-                products = data.get("data", {}).get("products", [])
-                if products:
-                    product = products[0]
-                    title = f"{product.get('brand', '')} {product.get('name', '')}".strip()
+                html = resp.text
 
-                    vol = product.get("vol", int(nm_id) // 100000)
-                    part = product.get("part", int(nm_id) // 1000)
-                    host = _wb_basket_host(vol)
-                    image_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/images/big/1.jpg"
+                title_match = re.search(r'<h1[^>]*>(.*?)</h1>', html, re.DOTALL)
+                title = title_match.group(1).strip() if title_match else None
+                if title:
+                    title = re.sub(r'<[^>]+>', '', title).strip()
 
-                    sizes = product.get("sizes", [])
-                    if sizes:
-                        total = sizes[0].get("price", {}).get("total", 0)
-                        if total > 0:
-                            return title, image_url, total / 100
-                    return title, image_url, None
+                price_match = re.search(r'"priceU":\s*(\d+)', html)
+                if price_match:
+                    price = int(price_match.group(1)) / 100
+                    return title, price
+
+                price_match = re.search(r'(\d[\d\s]*)\s*₽', html)
+                if price_match:
+                    price_str = price_match.group(1).replace(' ', '')
+                    try:
+                        return title, float(price_str)
+                    except ValueError:
+                        pass
     except Exception as e:
-        logger.error(f"API error: {e}")
-    return None, None, None
+        logger.error(f"Page fetch error: {e}")
+    return None, None
 
 
 async def parse_product(url: str) -> dict | None:
@@ -146,17 +160,14 @@ async def parse_product(url: str) -> dict | None:
     nm_id = match.group(1)
     logger.info(f"WB parsing nm_id={nm_id}")
 
-    title, image_url = await _fetch_card_info(nm_id)
-    price = await _fetch_price(nm_id)
+    title, image_url, price = await _fetch_cdn(nm_id)
 
     if not price:
-        api_title, api_image, api_price = await _fetch_api(nm_id)
-        if api_price:
-            price = api_price
-        if not title and api_title:
-            title = api_title
-        if not image_url and api_image:
-            image_url = api_image
+        page_title, page_price = await _fetch_page_price(url)
+        if page_price:
+            price = page_price
+        if not title and page_title:
+            title = page_title
 
     if not title:
         title = "Товар Wildberries"
