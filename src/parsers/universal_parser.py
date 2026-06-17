@@ -152,9 +152,9 @@ async def _fetch_api_v2(nm_id: str) -> tuple[str | None, str | None, float | Non
     return None, None, None
 
 
-async def _fetch_api_v2_scraper(nm_id: str) -> tuple[str | None, str | None, float | None]:
-    api_url = f"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={nm_id}"
-    resp = await _scraper_get(api_url)
+async def _fetch_search_scraper(nm_id: str) -> tuple[str | None, str | None, float | None]:
+    search_url = f"https://search.wb.ru/exactmatch/ru/common/v7/search?appType=1&curr=rub&dest=-1257786&spp=30&query={nm_id}&resultset=catalog&sort=popular&page=1"
+    resp = await _scraper_get(search_url)
     if resp:
         try:
             data = resp.json()
@@ -174,7 +174,55 @@ async def _fetch_api_v2_scraper(nm_id: str) -> tuple[str | None, str | None, flo
                         return title, image_url, total / 100
                 return title, image_url, None
         except Exception as e:
-            logger.error(f"Scraper API parse error: {e}")
+            logger.error(f"Search scraper parse error: {e}")
+    return None, None, None
+
+
+async def _fetch_page_scraper(url: str) -> tuple[str | None, str | None, float | None]:
+    resp = await _scraper_get(url)
+    if resp:
+        try:
+            html = resp.text
+
+            title = None
+            h1_match = re.search(r'<h1[^>]*>(.*?)</h1>', html, re.DOTALL)
+            if h1_match:
+                title = re.sub(r'<[^>]+>', '', h1_match.group(1)).strip()
+
+            price = None
+
+            for pattern in [
+                r'"priceU":\s*(\d+)',
+                r'"price":\s*"?(\d+)',
+                r'"salePriceU":\s*(\d+)',
+                r'"sale":\s*"?(\d+)',
+            ]:
+                m = re.search(pattern, html)
+                if m:
+                    val = int(m.group(1))
+                    if val > 100:
+                        price = val / 100
+                    elif val > 0:
+                        price = float(val)
+                    break
+
+            if not price:
+                price_match = re.search(r'(\d[\d\s]*)\s*₽', html)
+                if price_match:
+                    price_str = price_match.group(1).replace(' ', '')
+                    try:
+                        price = float(price_str)
+                    except ValueError:
+                        pass
+
+            image_url = None
+            og_match = re.search(r'<meta[^>]*property="og:image"[^>]*content="([^"]+)"', html)
+            if og_match:
+                image_url = og_match.group(1)
+
+            return title, image_url, price
+        except Exception as e:
+            logger.error(f"Page scraper parse error: {e}")
     return None, None, None
 
 
@@ -244,14 +292,24 @@ async def parse_product(url: str) -> dict | None:
             image_url = api_image
 
     if not price and SCRAPER_KEY:
-        s_title, s_image, s_price = await _fetch_api_v2_scraper(nm_id)
+        s_title, s_image, s_price = await _fetch_search_scraper(nm_id)
         if s_price:
             price = s_price
-            logger.info(f"Scraper API price: {price}")
+            logger.info(f"Search scraper price: {price}")
         if not title and s_title:
             title = s_title
         if not image_url and s_image:
             image_url = s_image
+
+    if not price and SCRAPER_KEY:
+        p_title, p_image, p_price = await _fetch_page_scraper(url)
+        if p_price:
+            price = p_price
+            logger.info(f"Page scraper price: {price}")
+        if not title and p_title:
+            title = p_title
+        if not image_url and p_image:
+            image_url = p_image
 
     if not title:
         title = "Товар Wildberries"
