@@ -309,6 +309,72 @@ async def _fetch_cdn(nm_id: str) -> tuple[str | None, str | None, float | None]:
     return title, image_url, price
 
 
+async def _fetch_api_scraper(nm_id: str) -> tuple[str | None, str | None, float | None]:
+    api_url = f"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={nm_id}"
+    resp = await _scraper_get(api_url)
+    if resp:
+        try:
+            data = resp.json()
+            logger.info(f"API scraper response: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+            products = data.get("data", {}).get("products", [])
+            if products:
+                product = products[0]
+                title = f"{product.get('brand', '')} {product.get('name', '')}".strip()
+                vol = product.get("vol", int(nm_id) // 100000)
+                part = product.get("part", int(nm_id) // 1000)
+                host = _wb_basket_host(vol)
+                image_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/images/big/1.jpg"
+
+                sizes = product.get("sizes", [])
+                if sizes:
+                    total = sizes[0].get("price", {}).get("total", 0)
+                    if total and total > 0:
+                        return title, image_url, total / 100
+                return title, image_url, None
+        except Exception as e:
+            logger.error(f"API scraper parse error: {e}")
+    return None, None, None
+
+
+async def _fetch_cdn_multi(nm_id: str) -> tuple[str | None, str | None, float | None]:
+    nm = int(nm_id)
+    vol = nm // 100000
+    host = _wb_basket_host(vol)
+
+    for part_divisor in [1000, 10000]:
+        part = nm // part_divisor
+        cdn_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/info/ru/card.json"
+        try:
+            async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+                resp = await client.get(cdn_url, headers=WB_HEADERS)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    title = data.get("imt_name", "")
+                    image_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/images/big/1.jpg"
+
+                    history_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/info/price-history.json"
+                    try:
+                        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client2:
+                            resp2 = await client2.get(history_url, headers=WB_HEADERS)
+                            if resp2.status_code == 200:
+                                hdata = resp2.json()
+                                history = hdata if isinstance(hdata, list) else hdata.get("history", [])
+                                if history:
+                                    latest = history[-1]
+                                    price_obj = latest.get("price", {})
+                                    if isinstance(price_obj, dict):
+                                        rub = price_obj.get("RUB", 0)
+                                        if rub and rub > 0:
+                                            return title, image_url, rub / 100
+                    except Exception:
+                        pass
+                    return title, image_url, None
+        except Exception:
+            pass
+
+    return None, None, None
+
+
 async def parse_product(url: str) -> dict | None:
     match = re.search(r"wildberries\.ru/catalog/(\d+)", url)
     if not match:
@@ -322,6 +388,16 @@ async def parse_product(url: str) -> dict | None:
         _update_headers(cookies)
 
     title, image_url, price = await _fetch_cdn(nm_id)
+    if not price:
+        title2, img2, price2 = await _fetch_cdn_multi(nm_id)
+        if price2:
+            price = price2
+            logger.info(f"CDN multi price: {price}")
+        if not title and title2:
+            title = title2
+        if not image_url and img2:
+            image_url = img2
+
     if price:
         logger.info(f"CDN price: {price}")
 
@@ -344,6 +420,16 @@ async def parse_product(url: str) -> dict | None:
             title = s_title
         if not image_url and s_image:
             image_url = s_image
+
+    if not price and SCRAPER_KEY:
+        a_title, a_image, a_price = await _fetch_api_scraper(nm_id)
+        if a_price:
+            price = a_price
+            logger.info(f"API scraper price: {price}")
+        if not title and a_title:
+            title = a_title
+        if not image_url and a_image:
+            image_url = a_image
 
     if not price and SCRAPER_KEY:
         p_title, p_image, p_price = await _fetch_page_scraper(url)
