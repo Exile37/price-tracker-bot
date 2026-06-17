@@ -7,8 +7,16 @@ from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
-WB_COOKIES = os.getenv("WB_COOKIES", "") or os.getenv("x_wbaas_token", "")
+WB_COOKIES_RAW = os.getenv("WB_COOKIES", "") or os.getenv("x_wbaas_token", "")
 SCRAPER_KEY = os.getenv("SCRAPER_API_KEY", "")
+
+if WB_COOKIES_RAW:
+    if "x_wbaas_token=" not in WB_COOKIES_RAW:
+        WB_COOKIES = f"x_wbaas_token={WB_COOKIES_RAW}"
+    else:
+        WB_COOKIES = WB_COOKIES_RAW
+else:
+    WB_COOKIES = ""
 
 WB_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
