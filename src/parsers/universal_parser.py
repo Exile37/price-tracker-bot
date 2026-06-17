@@ -1,13 +1,18 @@
 import re
 import httpx
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
+WB_COOKIES = os.getenv("WB_COOKIES", "")
 WB_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
     "Accept": "*/*",
+    "Accept-Language": "ru-RU,ru;q=0.9",
 }
+if WB_COOKIES:
+    WB_HEADERS["Cookie"] = WB_COOKIES
 
 
 def _wb_calc_vol_part(nm_id: str) -> tuple[int, int]:

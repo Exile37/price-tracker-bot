@@ -12,6 +12,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 STARS_PRICE = int(os.getenv("STARS_PRICE", "100"))
 PROXY_URL = os.getenv("PROXY_URL", "")
 OZON_COOKIES = os.getenv("OZON_COOKIES", "")
+WB_COOKIES = os.getenv("WB_COOKIES", "")
 SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY", "")
 WEBAPP_URL = os.getenv("WEBAPP_URL", "")
 if WEBAPP_URL and not WEBAPP_URL.startswith("https://"):
