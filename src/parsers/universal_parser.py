@@ -1,15 +1,16 @@
 import re
+import json
 import httpx
 import logging
 import os
 
 logger = logging.getLogger(__name__)
 
-WB_COOKIES = os.getenv("WB_COOKIES", "")
+WB_COOKIES = os.getenv("WB_COOKIES", "") or os.getenv("x_wbaas_token", "")
 WB_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-    "Accept": "*/*",
-    "Accept-Language": "ru-RU,ru;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 if WB_COOKIES:
     WB_HEADERS["Cookie"] = WB_COOKIES
@@ -71,18 +72,78 @@ def _wb_basket_host(vol: int) -> str:
         return "basket-23.wbbasket.ru"
 
 
-ALL_BASKET_HOSTS = [f"basket-{i:02d}.wbbasket.ru" for i in range(1, 24)]
+async def _fetch_page(url: str) -> tuple[str | None, str | None, float | None]:
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            resp = await client.get(url, headers=WB_HEADERS)
+            if resp.status_code != 200:
+                logger.warning(f"Page fetch status {resp.status_code}")
+                return None, None, None
+            html = resp.text
+
+            title = None
+            h1_match = re.search(r'<h1[^>]*>(.*?)</h1>', html, re.DOTALL)
+            if h1_match:
+                title = re.sub(r'<[^>]+>', '', h1_match.group(1)).strip()
+
+            price = None
+
+            ld_match = re.search(r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', html, re.DOTALL)
+            if ld_match:
+                try:
+                    ld = json.loads(ld_match.group(1))
+                    if isinstance(ld, dict) and "offers" in ld:
+                        offers = ld["offers"]
+                        if isinstance(offers, list):
+                            offers = offers[0] if offers else {}
+                        p = offers.get("price")
+                        if p:
+                            price = float(p)
+                except Exception:
+                    pass
+
+            if not price:
+                for pattern in [
+                    r'"priceU":\s*(\d+)',
+                    r'"price":\s*(\d+)',
+                    r'"salePriceU":\s*(\d+)',
+                ]:
+                    m = re.search(pattern, html)
+                    if m:
+                        val = int(m.group(1))
+                        if val > 100:
+                            price = val / 100
+                        else:
+                            price = float(val)
+                        break
+
+            if not price:
+                price_match = re.search(r'(\d[\d\s]*)\s*₽', html)
+                if price_match:
+                    price_str = price_match.group(1).replace(' ', '')
+                    try:
+                        price = float(price_str)
+                    except ValueError:
+                        pass
+
+            return title, image_url, price
+    except Exception as e:
+        logger.error(f"Page fetch error: {e}")
+    return None, None, None
 
 
-async def _try_cdn_host(host: str, vol: int, part: int, nm_id: str) -> tuple[str | None, str | None, float | None]:
+async def _fetch_cdn(nm_id: str) -> tuple[str | None, str | None, float | None]:
+    vol, part = _wb_calc_vol_part(nm_id)
+    host = _wb_basket_host(vol)
+    cdn_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/info/ru/card.json"
+
     title = None
     image_url = None
     price = None
 
-    card_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/info/ru/card.json"
     try:
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
-            resp = await client.get(card_url, headers=WB_HEADERS)
+            resp = await client.get(cdn_url, headers=WB_HEADERS)
             if resp.status_code == 200:
                 data = resp.json()
                 title = data.get("imt_name", "")
@@ -110,53 +171,6 @@ async def _try_cdn_host(host: str, vol: int, part: int, nm_id: str) -> tuple[str
     return title, image_url, price
 
 
-async def _fetch_cdn(nm_id: str) -> tuple[str | None, str | None, float | None]:
-    vol, part = _wb_calc_vol_part(nm_id)
-    host = _wb_basket_host(vol)
-
-    title, image_url, price = await _try_cdn_host(host, vol, part, nm_id)
-    if price:
-        return title, image_url, price
-
-    for h in ALL_BASKET_HOSTS:
-        if h == host:
-            continue
-        t, i, p = await _try_cdn_host(h, vol, part, nm_id)
-        if p:
-            return t or title, i or image_url, p
-
-    return title, image_url, price
-
-
-async def _fetch_page_price(url: str) -> tuple[str | None, float | None]:
-    try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            resp = await client.get(url, headers=WB_HEADERS)
-            if resp.status_code == 200:
-                html = resp.text
-
-                title_match = re.search(r'<h1[^>]*>(.*?)</h1>', html, re.DOTALL)
-                title = title_match.group(1).strip() if title_match else None
-                if title:
-                    title = re.sub(r'<[^>]+>', '', title).strip()
-
-                price_match = re.search(r'"priceU":\s*(\d+)', html)
-                if price_match:
-                    price = int(price_match.group(1)) / 100
-                    return title, price
-
-                price_match = re.search(r'(\d[\d\s]*)\s*₽', html)
-                if price_match:
-                    price_str = price_match.group(1).replace(' ', '')
-                    try:
-                        return title, float(price_str)
-                    except ValueError:
-                        pass
-    except Exception as e:
-        logger.error(f"Page fetch error: {e}")
-    return None, None
-
-
 async def parse_product(url: str) -> dict | None:
     match = re.search(r"wildberries\.ru/catalog/(\d+)", url)
     if not match:
@@ -166,13 +180,19 @@ async def parse_product(url: str) -> dict | None:
     logger.info(f"WB parsing nm_id={nm_id}")
 
     title, image_url, price = await _fetch_cdn(nm_id)
+    if price:
+        logger.info(f"CDN price: {price}")
 
-    if not price:
-        page_title, page_price = await _fetch_page_price(url)
-        if page_price:
+    if not price or not title:
+        page_title, page_image, page_price = await _fetch_page(url)
+        if page_price and not price:
             price = page_price
-        if not title and page_title:
+        if page_title and not title:
             title = page_title
+        if page_image and not image_url:
+            image_url = page_image
+        if price:
+            logger.info(f"Page price: {price}")
 
     if not title:
         title = "Товар Wildberries"
