@@ -158,16 +158,18 @@ async def _fetch_search_scraper(nm_id: str) -> tuple[str | None, str | None, flo
     if resp:
         try:
             data = resp.json()
-            logger.info(f"Search response keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
             products = data.get("data", {}).get("products", [])
             if not products:
                 products = data.get("products", [])
+            if not products:
+                sr = data.get("search_result", {})
+                products = sr.get("products", []) if isinstance(sr, dict) else []
             logger.info(f"Search found {len(products)} products")
 
             if products:
                 for product in products:
                     pid = str(product.get("id", product.get("nmId", "")))
-                    if pid == nm_id or not products[0].get("sizes"):
+                    if pid == nm_id:
                         title = f"{product.get('brand', product.get('supplier', ''))} {product.get('name', product.get('title', ''))}".strip()
                         vol = product.get("vol", int(nm_id) // 100000)
                         part = product.get("part", int(nm_id) // 1000)
@@ -177,16 +179,12 @@ async def _fetch_search_scraper(nm_id: str) -> tuple[str | None, str | None, flo
                         sizes = product.get("sizes", [])
                         if sizes:
                             price_info = sizes[0].get("price", {})
-                            total = price_info.get("total", 0)
-                            if not total:
-                                total = price_info.get("basic", 0)
+                            total = price_info.get("total", price_info.get("basic", 0))
                             if total and total > 0:
-                                logger.info(f"Search price found: {total / 100}")
                                 return title, image_url, total / 100
 
                         sale = product.get("salePriceU", product.get("sale", 0))
                         if sale and sale > 100:
-                            logger.info(f"Search sale price: {sale / 100}")
                             return title, image_url, sale / 100
 
                         return title, image_url, None
@@ -197,6 +195,18 @@ async def _fetch_search_scraper(nm_id: str) -> tuple[str | None, str | None, flo
                 part = product.get("part", int(nm_id) // 1000)
                 host = _wb_basket_host(vol)
                 image_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/images/big/1.jpg"
+
+                sizes = product.get("sizes", [])
+                if sizes:
+                    price_info = sizes[0].get("price", {})
+                    total = price_info.get("total", price_info.get("basic", 0))
+                    if total and total > 0:
+                        return title, image_url, total / 100
+
+                sale = product.get("salePriceU", product.get("sale", 0))
+                if sale and sale > 100:
+                    return title, image_url, sale / 100
+
                 return title, image_url, None
         except Exception as e:
             logger.error(f"Search scraper parse error: {e}")
