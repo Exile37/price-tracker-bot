@@ -9,8 +9,10 @@ logger = logging.getLogger(__name__)
 WB_COOKIES = os.getenv("WB_COOKIES", "") or os.getenv("x_wbaas_token", "")
 WB_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept": "application/json",
+    "Accept-Language": "ru-RU,ru;q=0.9",
+    "Origin": "https://www.wildberries.ru",
+    "Referer": "https://www.wildberries.ru/",
 }
 if WB_COOKIES:
     WB_HEADERS["Cookie"] = WB_COOKIES
@@ -72,63 +74,67 @@ def _wb_basket_host(vol: int) -> str:
         return "basket-23.wbbasket.ru"
 
 
-async def _fetch_page(url: str) -> tuple[str | None, str | None, float | None]:
+async def _fetch_api_v2(nm_id: str) -> tuple[str | None, str | None, float | None]:
+    from config.settings import PROXY_URL
+    api_url = f"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={nm_id}"
+    proxies = PROXY_URL if PROXY_URL else None
+
     try:
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-            resp = await client.get(url, headers=WB_HEADERS)
-            if resp.status_code != 200:
-                logger.warning(f"Page fetch status {resp.status_code}")
-                return None, None, None
-            html = resp.text
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True, proxy=proxies) as client:
+            resp = await client.get(api_url, headers=WB_HEADERS)
+            if resp.status_code == 200:
+                data = resp.json()
+                products = data.get("data", {}).get("products", [])
+                if products:
+                    product = products[0]
+                    title = f"{product.get('brand', '')} {product.get('name', '')}".strip()
+                    vol = product.get("vol", int(nm_id) // 100000)
+                    part = product.get("part", int(nm_id) // 1000)
+                    host = _wb_basket_host(vol)
+                    image_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/images/big/1.jpg"
 
-            title = None
-            h1_match = re.search(r'<h1[^>]*>(.*?)</h1>', html, re.DOTALL)
-            if h1_match:
-                title = re.sub(r'<[^>]+>', '', h1_match.group(1)).strip()
-
-            price = None
-
-            ld_match = re.search(r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', html, re.DOTALL)
-            if ld_match:
-                try:
-                    ld = json.loads(ld_match.group(1))
-                    if isinstance(ld, dict) and "offers" in ld:
-                        offers = ld["offers"]
-                        if isinstance(offers, list):
-                            offers = offers[0] if offers else {}
-                        p = offers.get("price")
-                        if p:
-                            price = float(p)
-                except Exception:
-                    pass
-
-            if not price:
-                for pattern in [
-                    r'"priceU":\s*(\d+)',
-                    r'"price":\s*(\d+)',
-                    r'"salePriceU":\s*(\d+)',
-                ]:
-                    m = re.search(pattern, html)
-                    if m:
-                        val = int(m.group(1))
-                        if val > 100:
-                            price = val / 100
-                        else:
-                            price = float(val)
-                        break
-
-            if not price:
-                price_match = re.search(r'(\d[\d\s]*)\s*₽', html)
-                if price_match:
-                    price_str = price_match.group(1).replace(' ', '')
-                    try:
-                        price = float(price_str)
-                    except ValueError:
-                        pass
-
-            return title, image_url, price
+                    sizes = product.get("sizes", [])
+                    if sizes:
+                        total = sizes[0].get("price", {}).get("total", 0)
+                        if total > 0:
+                            return title, image_url, total / 100
+                    return title, image_url, None
+            else:
+                logger.warning(f"API v2 status {resp.status_code}")
     except Exception as e:
-        logger.error(f"Page fetch error: {e}")
+        logger.error(f"API v2 error: {e}")
+    return None, None, None
+
+
+async def _fetch_search_api(nm_id: str) -> tuple[str | None, str | None, float | None]:
+    from config.settings import PROXY_URL
+    api_url = f"https://search.wb.ru/exactmatch/ru/common/v7/search?appType=1&curr=rub&dest=-1257786&spp=30&query={nm_id}"
+    proxies = PROXY_URL if PROXY_URL else None
+
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True, proxy=proxies) as client:
+            resp = await client.get(api_url, headers=WB_HEADERS)
+            if resp.status_code == 200:
+                data = resp.json()
+                products = data.get("data", {}).get("products", [])
+                if products:
+                    product = products[0]
+                    title = f"{product.get('brand', '')} {product.get('name', '')}".strip()
+                    vol = product.get("vol", int(nm_id) // 100000)
+                    part = product.get("part", int(nm_id) // 1000)
+                    host = _wb_basket_host(vol)
+                    image_url = f"https://{host}/vol{vol}/part{part}/{nm_id}/images/big/1.jpg"
+
+                    sizes = product.get("sizes", [])
+                    if sizes:
+                        total = sizes[0].get("price", {}).get("total", 0)
+                        if total > 0:
+                            return title, image_url, total / 100
+                    return title, image_url, None
+            else:
+                logger.warning(f"Search API status {resp.status_code}")
+    except Exception as e:
+        logger.error(f"Search API error: {e}")
     return None, None, None
 
 
@@ -183,16 +189,25 @@ async def parse_product(url: str) -> dict | None:
     if price:
         logger.info(f"CDN price: {price}")
 
-    if not price or not title:
-        page_title, page_image, page_price = await _fetch_page(url)
-        if page_price and not price:
-            price = page_price
-        if page_title and not title:
-            title = page_title
-        if page_image and not image_url:
-            image_url = page_image
-        if price:
-            logger.info(f"Page price: {price}")
+    if not price:
+        api_title, api_image, api_price = await _fetch_api_v2(nm_id)
+        if api_price:
+            price = api_price
+            logger.info(f"API v2 price: {price}")
+        if not title and api_title:
+            title = api_title
+        if not image_url and api_image:
+            image_url = api_image
+
+    if not price:
+        s_title, s_image, s_price = await _fetch_search_api(nm_id)
+        if s_price:
+            price = s_price
+            logger.info(f"Search API price: {price}")
+        if not title and s_title:
+            title = s_title
+        if not image_url and s_image:
+            image_url = s_image
 
     if not title:
         title = "Товар Wildberries"
