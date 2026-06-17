@@ -214,6 +214,56 @@ async def _fetch_search_scraper(nm_id: str) -> tuple[str | None, str | None, flo
     return None, None, None
 
 
+async def _fetch_wb_search_page(nm_id: str) -> tuple[str | None, str | None, float | None]:
+    search_page_url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={nm_id}"
+    resp = await _scraper_get(search_page_url, render=True)
+    if resp:
+        logger.info(f"WB search page status: {resp.status_code}, len: {len(resp.text)}")
+        try:
+            html = resp.text
+
+            nm_id_match = re.search(r'nm_id[' + '"' + r':\s]+(\d+)', html)
+            if nm_id_match:
+                found_id = nm_id_match.group(1)
+                logger.info(f"WB search found nm_id: {found_id}")
+
+            for pattern in [
+                r'"priceU":\s*(\d+)',
+                r'"price":\s*"?(\d+)',
+                r'"salePriceU":\s*(\d+)',
+                r'"sale":\s*"?(\d+)',
+                r'"totalPrice":\s*(\d+)',
+            ]:
+                m = re.search(pattern, html)
+                if m:
+                    val = int(m.group(1))
+                    if val > 100:
+                        price = val / 100
+                        logger.info(f"WB search price from {pattern}: {price}")
+
+                        title_match = re.search(r'"name[' + '"' + r':\s]+([^"]+)', html)
+                        title = title_match.group(1) if title_match else None
+
+                        return title, None, price
+
+            price_match = re.search(r'(\d[\d\s]*)\s*₽', html)
+            if price_match:
+                price_str = price_match.group(1).replace(' ', '')
+                try:
+                    price = float(price_str)
+                    if price > 10:
+                        logger.info(f"WB search price from ₽: {price}")
+                        return None, None, price
+                except ValueError:
+                    pass
+
+        except Exception as e:
+            logger.error(f"WB search page parse error: {e}")
+    else:
+        logger.warning("WB search page: no response")
+    return None, None, None
+
+
 async def _fetch_page_scraper(url: str) -> tuple[str | None, str | None, float | None]:
     resp = await _scraper_get(url, render=True)
     if resp:
@@ -440,6 +490,16 @@ async def parse_product(url: str) -> dict | None:
             title = p_title
         if not image_url and p_image:
             image_url = p_image
+
+    if not price and SCRAPER_KEY:
+        ws_title, ws_image, ws_price = await _fetch_wb_search_page(nm_id)
+        if ws_price:
+            price = ws_price
+            logger.info(f"WB search page price: {price}")
+        if not title and ws_title:
+            title = ws_title
+        if not image_url and ws_image:
+            image_url = ws_image
 
     if not title:
         title = "Товар Wildberries"
