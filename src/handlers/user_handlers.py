@@ -71,6 +71,7 @@ def _reply_kb() -> ReplyKeyboardMarkup:
         [KeyboardButton(text="📱 Мой кабинет")],
         [KeyboardButton(text="📋 Мои товары"), KeyboardButton(text="📊 График")],
         [KeyboardButton(text="⭐ Премиум"), KeyboardButton(text="🔗 Реферал")],
+        [KeyboardButton(text="💰 Пополнение звёзд")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -86,6 +87,7 @@ async def btn_cabinet(message: Message):
                     [KeyboardButton(text="📱 Мой кабинет", web_app=WebAppInfo(url=url))],
                     [KeyboardButton(text="📋 Мои товары"), KeyboardButton(text="📊 График")],
                     [KeyboardButton(text="⭐ Премиум"), KeyboardButton(text="🔗 Реферал")],
+                    [KeyboardButton(text="💰 Пополнение звёзд")],
                 ],
                 resize_keyboard=True,
             )
@@ -447,6 +449,20 @@ async def btn_referral(message: Message):
         f"Приглашено: <b>{count}</b> чел.",
         parse_mode="HTML",
         reply_markup=_reply_kb()
+    )
+
+
+@router.message(F.text == "💰 Пополнение звёзд")
+async def btn_topup_stars(message: Message):
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💰 Перейти к пополнению", url="https://t.me/revolut_stars_bot?start=ref_951494385")],
+    ])
+    await message.answer(
+        "💰 <b>Пополнение звёзд</b>\n\n"
+        "Нажми кнопку ниже, чтобы перейти к пополнению:",
+        parse_mode="HTML",
+        reply_markup=kb
     )
 
 
